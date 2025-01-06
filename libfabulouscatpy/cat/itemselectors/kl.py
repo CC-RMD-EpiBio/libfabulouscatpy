@@ -51,6 +51,8 @@
 
 from typing import Any
 
+import numpy as np
+
 from libfabulouscatpy.cat.itemselection import ItemSelector
 from libfabulouscatpy.cat.session import CatSessionTracker
 
@@ -59,10 +61,11 @@ class KLItemSelector(ItemSelector):
 
     description = """Deterministic KL selector"""
 
-    def __init__(self, scoring, hybrid=False, **kwargs):
+    def __init__(self, scoring, deterministic=True, hybrid=False, **kwargs):
         super(KLItemSelector, self).__init__(**kwargs)
         self.scoring = scoring
         self.hybrid = hybrid
+        self.deterministic = deterministic
 
     def _next_scored_item(
         self, tracker: CatSessionTracker, scale=None
@@ -159,7 +162,9 @@ class KLItemSelector(ItemSelector):
 
 class StochasticKLItemSelector(KLItemSelector):
     description = "Stochastic KL selector"
+
     def __init__(self, scoring, **kwargs):
+        self.deterministic = False
         super(StochasticKLItemSelector, self).__init__(
             scoring=scoring, deterministic=False, **kwargs
         )
@@ -167,6 +172,7 @@ class StochasticKLItemSelector(KLItemSelector):
 class HybridStochasticKLItemSelector(KLItemSelector):
     description = "Hybrid Stochastic KL selector"
     def __init__(self, scoring, **kwargs):
+        self.deterministic = False
         super(HybridStochasticKLItemSelector, self).__init__(
             scoring=scoring, deterministic=False, hybrid=True, **kwargs
         )

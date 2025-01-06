@@ -56,7 +56,7 @@ from typing import Any
 import numpy as np
 
 from libfabulouscatpy import constants as const
-from libfabulouscatpy.cat.session import CatSessionTracker, CatSession
+from libfabulouscatpy.cat.session import CatSessionTracker
 from libfabulouscatpy.irt.prediction import IRTModel
 
 
@@ -88,6 +88,7 @@ class ItemSelector(ABC):
         min_responses: int = 5,
         max_responses: int = 12,
         inadmissable_scales: list[str] | None = None,
+        deterministic: bool = True,
         **kwargs,
     ) -> None:
         """Instantiate item selector class
@@ -111,7 +112,7 @@ class ItemSelector(ABC):
         self.items = items
         self.scales = scales
         self.itemdict = {x["item"]: x for x in items}
-
+        self.deterministic = deterministic
         self.unscored_count = 0
         self.inadmissable_scales = (
             [] if inadmissable_scales is None else inadmissable_scales

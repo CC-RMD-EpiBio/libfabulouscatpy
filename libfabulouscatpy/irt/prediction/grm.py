@@ -95,7 +95,7 @@ class GradedResponseModel(IRTModel):
         self.item_labels = item_labels
         self.slope = np.array(slope)
         # Since the calibration rows vary in length, we pad with zeros.
-        self.calibration = calibration
+        self.calibration = np.atleast_1d(calibration)
 
         return None
 
@@ -180,7 +180,7 @@ class GradedResponseModel(IRTModel):
         if not observed_only:
             return np.log(p + 1e-20)
         selected = np.array(list(responses.values()))
-        p_observed = p.T[selected].T
+        p_observed = p.T[selected-1].T
 
         p_observed = np.sum(np.log(p_observed + 1e-20), axis=-1)
         p_observed = np.sum(p_observed, axis=-1)
@@ -294,16 +294,15 @@ class MultivariateGRM(FactorizedIRTModel):
                 coords={
                     "theta": self.interpolation_pts,
                     "item": item_labels[scale],
-                    "choice": np.arange(models[scale].category_max),
+                    "choice": np.arange(probs[scale].shape[-1]),
                 },
             )
-            pass
         return
 
     def log_likelihood(
         self, theta: npt.ArrayLike | None, responses: dict[str:int] = None
     ):
-        pass
+        return
 
     def item_information(
         self, items: list[str], abilities: dict[str, float]

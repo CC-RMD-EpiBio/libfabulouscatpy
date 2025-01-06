@@ -43,12 +43,10 @@ class BayesianScore(ScoreBase):
         self.density = density
         self.median = median
         
-def gaussian_dens():
-    sigma = 3
-    def _gaussian_dens():
-        def f(x):
-            return  -0.5 * (x / sigma) ** 2
-        return f
+def gaussian_dens(sigma):
+    def _gaussian_dens(x):
+        return  -0.5 * (x / sigma) ** 2
+
     return _gaussian_dens
 
 class BayesianScoring(ScoringBase):
@@ -57,19 +55,22 @@ class BayesianScoring(ScoringBase):
         self,
         model: IRTModel | None = None,
         log_prior_fn: dict[str, Callable] | None = None,
+        skipped_response: int | None = None,
     ) -> None:
         super().__init__(model)
         self.log_like = {}
-        self.log_prior_fn = (
-            log_prior_fn
-            if log_prior_fn is not None
-            else defaultdict(gaussian_dens)
-        )
+        self.log_prior_fn =log_prior_fn
         self.interpolation_pts = {}
         self.log_prior = {}
+        self.skipped_response = skipped_response if skipped_response is not None else const.SKIPPED_RESPONSE
+        self.n_scored = defaultdict(int)
+
         for scale in self.model.models.keys():
             self.log_like[scale] = model.interpolation_pts * 0
-            self.log_prior[scale] = self.log_prior_fn[scale](model.interpolation_pts)
+            if log_prior_fn is not None:
+                self.log_prior[scale] = self.log_prior_fn[scale](model.interpolation_pts)
+            else:
+                self.log_prior[scale] = 0 
             self.interpolation_pts[scale] = model.interpolation_pts
         self.score_responses({})
         
@@ -90,6 +91,7 @@ class BayesianScoring(ScoringBase):
             for ii in i:
                 self.scored_responses[ii] = responses[ii]
 
+
     def add_responses(self, responses: dict) -> None:
         to_compute = {
             k: [x for x in v if x in responses.keys()]
@@ -105,6 +107,7 @@ class BayesianScoring(ScoringBase):
             self.log_like[scale] += log_l
             for ii in i:
                 self.scored_responses[ii] = responses[ii]
+            self.n_scored[scale] += len(i)
 
     def score_responses(
         self, responses: dict, scales: list[str] | None = None, **kwargs
@@ -120,12 +123,12 @@ class BayesianScoring(ScoringBase):
         to_add = {
             k: v
             for k, v in responses.items()
-            if (v != self.scored_responses.get(k, None) and v!=const.SKIPPED_RESPONSE)
+            if (v != self.scored_responses.get(k, None) and v!=self.skipped_response)
         }
         to_delete = {
             k: v
             for k, v in self.scored_responses.items()
-            if (v != responses.get(k, None) and v!=const.SKIPPED_RESPONSE)
+            if (v != responses.get(k, None) and v!=self.skipped_response)
         }
         self.add_responses(to_add)
         self.remove_responses(to_delete)
