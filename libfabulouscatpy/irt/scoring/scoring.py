@@ -178,6 +178,8 @@ class ScoringBase(ABC):
         self.offset_factor = offset_factor
         self.scaling_factor = scaling_factor
         self.scored_responses = {}
+        self.n_scored = defaultdict(int)
+
         
     @classmethod
     @abstractmethod
