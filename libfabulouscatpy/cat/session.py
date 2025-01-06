@@ -49,11 +49,11 @@
 #
 ###############################################################################
 
-class Session(object):
+class CatSession(object):
     pass
 
 class CatSessionTracker(object):
-    def __init__(self, session: Session, scales) -> None:
+    def __init__(self, session: CatSession, scales) -> None:
         """
         Parameters: scales: list
                         List of available scales.

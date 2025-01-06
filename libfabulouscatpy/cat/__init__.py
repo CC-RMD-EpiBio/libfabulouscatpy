@@ -49,7 +49,7 @@
 #
 ###############################################################################
 
-from libfabulouscatpy.cat import itemselection, views
+from libfabulouscatpy.cat import itemselection
 from libfabulouscatpy.irt import scoring
 
-__all__ = ["views", "irt", "itemselection", "rwas", "models", "scoring"]
+__all__ = [ "irt", "itemselection", "rwas", "models", "scoring"]

@@ -50,8 +50,8 @@
 ###############################################################################
 
 
-from .autoencodedgrm import MixtureGRM
+from .autoencodedgrm import AutoencodedGRM
 from .grm import GradedResponseModel, MultivariateGRM
 from .irt import IRTModel
 
-__all__ = ["GradedResponseModel", "MultivariateGRM", "IRTModel", "MixtureGRM"]
+__all__ = ["GradedResponseModel", "MultivariateGRM", "IRTModel", "AutoencodedGRM"]
