@@ -49,6 +49,8 @@
 #
 ###############################################################################
 
+from libfabulouscatpy.irt.prediction.grm import MultivariateGRM
+
 
 class AutoencodedGRM(MultivariateGRM):
     description = "Autoencoded multidimensional GRM"

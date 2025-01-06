@@ -56,7 +56,7 @@ from typing import Any
 import numpy as np
 
 from libfabulouscatpy import constants as const
-from libfabulouscatpy.cat.session import CatSessionTracker
+from libfabulouscatpy.cat.session import CatSessionTracker, CatSession
 from libfabulouscatpy.irt.prediction import IRTModel
 
 
@@ -297,7 +297,7 @@ class ItemSelector(ABC):
         """
         return list(self.scales)
 
-    def next_scale(self, session: CatSession, scale: str | None = None):
+    def next_scale(self, session: CatSessionTracker, scale: str | None = None):
         cons = const.SKIPPED_RESPONSE
 
         # if scale is None:
