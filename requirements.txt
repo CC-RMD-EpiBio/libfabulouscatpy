@@ -21,6 +21,6 @@ python-dotenv==1.0.0
 PyYAML==6.0.1
 redis==4.6.0
 scipy==1.11.1
-setuptools==63.4.3
+setuptools==70.0.0
 tox==4.6.4
 xarray==2024.7.0
