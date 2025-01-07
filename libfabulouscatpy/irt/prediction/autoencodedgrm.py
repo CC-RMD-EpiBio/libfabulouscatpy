@@ -49,8 +49,28 @@
 #
 ###############################################################################
 
+from typing import Any
+
+import numpy.typing as npt
+
+from libfabulouscatpy.irt.item import ItemDatabase, ScaleDatabase
 from libfabulouscatpy.irt.prediction.grm import MultivariateGRM
 
 
 class AutoencodedGRM(MultivariateGRM):
     description = "Autoencoded multidimensional GRM"
+
+    def __init__(
+        self,
+        itemdb: ItemDatabase,
+        scaledb: ScaleDatabase,
+        interpolation_pts: npt.NDArray[Any] | None = None,
+    ) -> None:
+        models = {}
+        probs = {}
+        return None
+        
+    def log_likelihood(
+        self, theta: npt.ArrayLike | None, responses: dict[str:int] = None
+    ):
+        return

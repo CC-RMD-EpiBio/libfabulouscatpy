@@ -4,6 +4,7 @@ import numpy as np
 
 from libfabulouscatpy.cat.itemselection import ItemSelector
 from libfabulouscatpy.cat.session import CatSessionTracker
+from libfabulouscatpy.irt.scoring import BayesianScoring
 
 
 class VarianceItemSelector(ItemSelector):
@@ -14,30 +15,9 @@ class VarianceItemSelector(ItemSelector):
         super(VarianceItemSelector, self).__init__(**kwargs)
         self.scoring = scoring
 
-    def _next_scored_item(
-        self, tracker: CatSessionTracker, scale=None
-    ) -> dict[str : dict[str:Any]]:
-        """
-        Parameters: session: instance of CatSession
-        Returns:    item dictionary entry or None
-        """
-        scale = self.next_scale(tracker)
-        un_items = self.un_items(tracker, scale)
+    def criterion(self, scoring: BayesianScoring, items: list[dict], scale=None) -> dict[str: Any]:
 
-        if un_items is None:
-            # Not sure if this can happen under normal testing, but included as
-            # a safety feature.
-            return None
-
-        trait = tracker.scores[scale]
-        trait = 0.0 if trait is None else trait
-        error = tracker.errors[scale]
-        error = 100.0 if error is None else error
-
-        # We now have a value for the trait, this allows the calculation of the
-        # Fisher Information, which is used to select the new item.
-
-        unresponded = [i for i in un_items if "scales" in i.keys()]
+        unresponded = [i for i in items if "scales" in i.keys()]
         in_scale = [i for i in unresponded if scale in i["scales"].keys()]
 
         if len(in_scale) == 0:
@@ -85,6 +65,33 @@ class VarianceItemSelector(ItemSelector):
         variance = second - mean**2
         variance = np.sum(variance * np.exp(log_ell) * pi_infty, axis=-1)
         variance = np.sum(variance, axis=0)
+        
+        criterion = dict(zip([x['item'] for x in items], variance))
+        return criterion
+
+    def _next_scored_item(
+        
+        self, tracker: CatSessionTracker, scale=None
+        ) -> dict[str : dict[str:Any]]:
+        
+        scale = self.next_scale(tracker)
+        un_items = self.un_items(tracker, scale)
+
+        if un_items is None:
+            # Not sure if this can happen under normal testing, but included as
+            # a safety feature.
+            return None
+
+        trait = tracker.scores[scale]
+        trait = 0.0 if trait is None else trait
+        error = tracker.errors[scale]
+        error = 100.0 if error is None else error
+        
+        criterion = self.criterion(scoring=self.scoring, items = un_items, scale=scale)
+        if criterion is None:
+            return None
+        variance = list(criterion.values())
+        
         variance /= np.max(variance)
         probs = np.exp(-variance) ** (1 / self.temperature)
         probs /= np.sum(probs)
@@ -92,8 +99,8 @@ class VarianceItemSelector(ItemSelector):
         if self.deterministic:
             ndx = np.argmax(probs)
         else:
-            ndx = np.random.choice(np.arange(len(in_scale)), p=probs)
-        result = in_scale[ndx]
+            ndx = np.random.choice(np.arange(len(un_items)), p=probs)
+        result = un_items[ndx]
         return result
 
 
