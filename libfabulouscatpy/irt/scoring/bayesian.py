@@ -1,25 +1,27 @@
 
 from collections import defaultdict
-from typing import Callable
+from typing import Callable, Optional, Tuple, Union
 
 import numpy as np
+import numpy.typing as npt
 from scipy import integrate
 
 from libfabulouscatpy import constants as const
 from libfabulouscatpy.irt.prediction.irt import IRTModel
-from libfabulouscatpy.irt.scoring.scoring import ScoreBase, ScoringBase
+from libfabulouscatpy.irt.scoring.scoring import (ScoreBase, ScoringBase,
+                                                  sample_from_cdf)
 
 
 class BayesianScore(ScoreBase):
     def __init__(
         self,
-        scale,
-        description,
-        density,
-        interpolation_pts,
-        offset_factor=0,
-        scaling_factor=1,
-        symmetric_errors=True
+        scale: str,
+        description: str,
+        density: npt.ArrayLike,
+        interpolation_pts: npt.ArrayLike,
+        offset_factor:float=0,
+        scaling_factor:float=1,
+        symmetric_errors:bool=True
     ):
         self.interpolation_pts = interpolation_pts
         z = np.trapz(y=density, x=interpolation_pts)
@@ -42,7 +44,11 @@ class BayesianScore(ScoreBase):
             scale, description, score, error, offset_factor, scaling_factor
         )
         self.density = density
+        self.cdf = cdf
         self.median = median
+        
+    def sample(self, shape: Union[int, Tuple[int, ...]] = 1) -> Optional[npt.ArrayLike]:
+        return sample_from_cdf(self.interpolation_pts, self.cdf, shape)
         
 def gaussian_dens(sigma):
     def _gaussian_dens(x):

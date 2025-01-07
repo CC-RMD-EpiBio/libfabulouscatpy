@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from collections import defaultdict
 
+import numpy as np
+
 from libfabulouscatpy.irt.prediction.irt import IRTModel
 
 
@@ -9,7 +11,45 @@ def return_zero():
 def return_one():
     return 1.
 
- 
+def sample_from_cdf(x, cdf, shape=1):
+    """
+    Samples from a probability distribution defined by points and CDF values.
+
+    Args:
+        x: A 1D array of x-values (points). Must be monotonically increasing.
+        cdf: A 1D array of CDF values corresponding to x. Must be monotonically 
+             increasing, start at 0, and end at 1.
+        shape: The shape of the output array (number of replications). Can be an int or a tuple.
+
+    Returns:
+        A NumPy array of samples from the distribution with the given shape.
+        Returns None if input is invalid.
+    """
+
+    if not (np.all(np.diff(x) >= 0) and 
+            np.all(np.diff(cdf) >= 0) and
+            np.isclose(cdf[0], 0) and 
+            np.isclose(cdf[-1], 1)):
+        print("Error: Invalid input. 'x' and 'cdf' must be monotonically increasing.\
+               'cdf' must start at 0 and end at 1.")
+        return None
+     # Generate uniform random numbers with the specified shape
+    u = np.random.rand(*np.atleast_1d(shape)) # use * to unpack shape if it is a tuple
+
+    # Vectorized searchsorted for efficiency
+    indices = np.searchsorted(cdf, u)
+
+    # Handle edge cases using vectorized operations
+    indices = np.clip(indices, 1, len(x)-1) #clip indices to prevent index errors
+
+    x_lower = x[indices - 1]
+    x_upper = x[indices]
+    cdf_lower = cdf[indices - 1]
+    cdf_upper = cdf[indices]
+
+    sampled_x = x_lower + (x_upper - x_lower) * (u - cdf_lower) / (cdf_upper - cdf_lower)
+
+    return sampled_x
 class ScoreBase(object):
     """
     Accepts the raw materials of a score and provides methods for transforming

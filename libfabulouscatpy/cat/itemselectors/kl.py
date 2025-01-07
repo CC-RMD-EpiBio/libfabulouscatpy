@@ -196,3 +196,42 @@ class HybridStochasticKLItemSelector(KLItemSelector):
         super(HybridStochasticKLItemSelector, self).__init__(
             scoring=scoring, deterministic=False, hybrid=True, **kwargs
         )
+
+class McKlItemSelector(KLItemSelector):
+    description = "Monte-Carlo KL selector"
+
+    def criterion(self, scoring: BayesianScoring, items: list[dict], scale=None) -> dict[str: Any]:
+        unresponded = [i for i in items if "scales" in i.keys()]
+        in_scale = [i for i in unresponded if scale in i["scales"].keys()]
+
+        if len(in_scale) == 0:
+            return {}
+
+        unresponded_ndx = [
+            self.model.item_labels[scale].index(j["item"]) for j in unresponded
+        ]
+
+        #####
+        # current
+        ######
+        current_score = scoring.scores[scale]
+        energy = self.scoring.log_like[scale] + self.scoring.log_prior[scale]
+        return {}
+      
+
+class StochasticMcKlItemSelector(McKlItemSelector):
+    description = "Stochastic MC-KL selector"
+
+    def __init__(self, scoring, **kwargs):
+        self.deterministic = False
+        super(StochasticKLItemSelector, self).__init__(
+            scoring=scoring, deterministic=False, **kwargs
+        )
+          
+class HybridStochasticMcKlItemSelector(McKlItemSelector):
+    description = "Hybrid Stochastic MC-KL selector"
+    def __init__(self, scoring, **kwargs):
+        self.deterministic = False
+        super(HybridStochasticMcKlItemSelector, self).__init__(
+            scoring=scoring, deterministic=False, hybrid=True, **kwargs
+        )
