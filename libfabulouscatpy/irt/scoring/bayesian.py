@@ -21,6 +21,7 @@ class BayesianScore(ScoreBase):
         scaling_factor=1,
         symmetric_errors=True
     ):
+        self.interpolation_pts = interpolation_pts
         z = np.trapz(y=density, x=interpolation_pts)
         score = np.trapz(y=density * interpolation_pts, x=interpolation_pts)/z
         cdf = integrate.cumtrapz(density, interpolation_pts, initial=0)/z

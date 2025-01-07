@@ -58,6 +58,7 @@ import numpy as np
 from libfabulouscatpy import constants as const
 from libfabulouscatpy.cat.session import CatSessionTracker
 from libfabulouscatpy.irt.prediction import IRTModel
+from libfabulouscatpy.irt.scoring import BayesianScoring
 
 
 class ItemSelector(ABC):
@@ -264,8 +265,41 @@ class ItemSelector(ABC):
         return self._next_scored_item(tracker, scale)
     
     @abstractmethod
-    def _next_scored_item(self, tracker: CatSessionTracker, scale=None) -> dict[str: Any]:
-        return None
+    def criterion(self, scoring: BayesianScoring, items: list[dict], scale=None) -> dict[str: Any]:
+        return {}
+    
+    def _next_scored_item(
+        
+        self, tracker: CatSessionTracker, scale=None
+        ) -> dict[str : dict[str:Any]]:
+        
+        scale = self.next_scale(tracker)
+        un_items = self.un_items(tracker, scale)
+
+        if un_items is None or len(un_items) == 0:
+            # Not sure if this can happen under normal testing, but included as
+            # a safety feature.
+            return None
+
+        trait = tracker.scores[scale]
+        trait = 0.0 if trait is None else trait
+        error = tracker.errors[scale]
+        error = 100.0 if error is None else error
+        
+        criterion = self.criterion(scoring=self.scoring, items = un_items, scale=scale)
+
+        variance = list(criterion.values())
+        
+        variance /= np.max(variance)
+        probs = np.exp(-variance) ** (1 / self.temperature)
+        probs /= np.sum(probs)
+
+        if self.deterministic:
+            ndx = np.argmax(probs)
+        else:
+            ndx = np.random.choice(np.arange(len(un_items)), p=probs)
+        result = un_items[ndx]
+        return result
 
     def _next_unscored_item(self, tracker: CatSessionTracker) -> dict[str: Any]:
         """Retrieve the next unscored item

@@ -55,34 +55,26 @@ import numpy as np
 
 from libfabulouscatpy.cat.itemselection import ItemSelector
 from libfabulouscatpy.cat.session import CatSessionTracker
+from libfabulouscatpy.irt.scoring import BayesianScoring
 
 
 class FisherItemSelector(ItemSelector):
     
     description = """Fisher information selector"""
+    def __init__(self, scoring, deterministic=True, **kwargs):
+        super(FisherItemSelector, self).__init__(**kwargs)
+        self.scoring = scoring
+        self.deterministic = deterministic
+        
+    def criterion(self, scoring: BayesianScoring, items: list[dict], scale=None) -> dict[str: Any]:
 
-    def _next_scored_item(self, tracker: CatSessionTracker, scale=None) -> dict[str: dict[str:Any]]:
-        """
-        Parameters: session: instance of CatSessionTracker
-        Returns:    item dictionary entry or None
-        """
-        scale = self.next_scale(tracker)
-        un_items = self.un_items(tracker, scale)
-
-        if un_items is None:
-            # Not sure if this can happen under normal testing, but included as
-            # a safety feature.
-            return None
-
-        trait = tracker.scores[scale]
-        trait = 0.0 if trait is None else trait
-        error = tracker.errors[scale]
-        error = 100.0 if error is None else error
-
+        means = {}
+        for k, v in scoring.scores.items():
+            means[k] = v.score
         # We now have a value for the trait, this allows the calculation of the
         # Fisher Information, which is used to select the new item.
 
-        scored = [i for i in un_items if "scales" in i.keys()]
+        scored = [i for i in items if "scales" in i.keys()]
         in_scale = [i for i in scored if scale in i["scales"].keys()]
 
         if len(in_scale) == 0:
@@ -90,15 +82,12 @@ class FisherItemSelector(ItemSelector):
         
         item_info = self.model.item_information(
             items=[x['item'] for x in in_scale],
-            abilities=tracker.scores
+            abilities=means
         )
-        fish_scored = [item_info[i['item']][0] for i in in_scale]
-        ndx = np.argmax(fish_scored)
+        fish_scored = {i["item"]: item_info[i['item']][0] for i in in_scale}
 
-        result = in_scale[ndx]
-
-        return result
-
+        return fish_scored
+    
 
 
 class StochasticFisherItemSelector(ItemSelector):
@@ -110,41 +99,24 @@ class StochasticFisherItemSelector(ItemSelector):
         Parameters: session: instance of CatSessionTracker
         Returns:    item dictionary entry or None
         """
-        scale = self.next_scale(tracker)
+        if scale is None:
+            scale = self.next_scale(tracker)
         un_items = self.un_items(tracker, scale)
 
         if un_items is None:
             # Not sure if this can happen under normal testing, but included as
             # a safety feature.
-            return None
-
-        trait = tracker.scores[scale]
-        trait = 0.0 if trait is None else trait
-        error = tracker.errors[scale]
-        error = 100.0 if error is None else error
-
-        # We now have a value for the trait, this allows the calculation of the
-        # Fisher Information, which is used to select the new item.
-
-        scored = [i for i in un_items if "scales" in i.keys()]
-        in_scale = [i for i in scored if scale in i["scales"].keys()]
-
-        if len(in_scale) == 0:
-            return None
+            return {}
         
-        item_info = self.model.item_information(
-            items=[x['item'] for x in in_scale],
-            abilities=tracker.scores
-        )
-        fish_scored = [item_info[i['item']][0] for i in in_scale]
+        fish_scored = self.criterion(tracker, scale)
         probs = np.array(fish_scored) ** (1/self.temperature)
         probs /= np.sum(probs)
 
         if self.deterministic:
             ndx = np.argmax(probs)
         else:
-            ndx = np.random.choice(np.arange(len(in_scale)), p=probs)
-        result = in_scale[ndx]
+            ndx = np.random.choice(np.arange(len(probs)), p=probs)
+        result = fish_scored.keys()[ndx]
         return result
 
 
