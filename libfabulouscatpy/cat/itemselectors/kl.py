@@ -196,3 +196,75 @@ class HybridStochasticKLItemSelector(KLItemSelector):
         super(HybridStochasticKLItemSelector, self).__init__(
             scoring=scoring, deterministic=False, hybrid=True, **kwargs
         )
+
+class McKlItemSelector(KLItemSelector):
+    description = "Monte-Carlo KL selector"
+    def __init__(self, scoring, n=100, deterministic=True, hybrid=False, **kwargs):
+        super(McKlItemSelector, self).__init__(scoring, **kwargs)
+        self.hybrid = hybrid
+        self.deterministic = deterministic
+        self.n = n
+        
+    def criterion(self, scoring: BayesianScoring, items: list[dict], scale=None) -> dict[str: Any]:
+        unresponded = [i for i in items if "scales" in i.keys()]
+        in_scale = [i for i in unresponded if scale in i["scales"].keys()]
+
+        if len(in_scale) == 0:
+            return {}
+
+        unresponded_ndx = [
+            self.model.item_labels[scale].index(j["item"]) for j in unresponded
+        ]
+
+        #####
+        # current
+        ######
+        current_score = scoring.scores[scale]
+        ability_samples = current_score.sample(self.n)
+        model = self.model.models[scale]
+        observed_energy = self.scoring.log_like[scale] + self.scoring.log_prior[scale]
+        observed_density = self.scoring.scores[scale].density
+        # future
+        lp_itemized = self.model.models[scale].log_likelihood(
+            theta=self.model.interpolation_pts, observed_only=False
+        )[
+            :, unresponded_ndx, :
+        ]  # ll for unobserved items
+        p_itemized = np.exp(lp_itemized)
+        item_labels = [x['item'] for x in in_scale]
+        
+        crit = []
+        for theta in ability_samples:
+            x = model.sample(theta)
+            x_ = {k['item']: x[k['item']] for k in in_scale}
+            ll_over_grid = model.log_likelihood(scoring.interpolation_pts[scale], responses=x_)
+            ndx = np.array(list(x_.values()))
+            lpi_infty = observed_energy + ll_over_grid
+            p_itemized_ = np.take_along_axis(p_itemized, ndx[np.newaxis, :, np.newaxis], axis=-1)[..., 0]
+            lpi_infty -= np.max(lpi_infty)
+            pi_infty = np.exp(lpi_infty)
+            z = np.trapz(pi_infty, scoring.interpolation_pts[scale])
+            pi_infty /= z
+            B = np.trapz(p_itemized_ * observed_density[:, np.newaxis], scoring.interpolation_pts[scale], axis=0)
+            A = np.trapz(np.log(p_itemized_) * pi_infty[:, np.newaxis], scoring.interpolation_pts[scale], axis=0)
+            crit += [B-A]
+        crit = np.mean(crit, axis=0)
+        return dict(zip(item_labels, crit))
+      
+
+class StochasticMcKlItemSelector(McKlItemSelector):
+    description = "Stochastic MC-KL selector"
+
+    def __init__(self, scoring, **kwargs):
+        self.deterministic = False
+        super(StochasticKLItemSelector, self).__init__(
+            scoring=scoring, deterministic=False, **kwargs
+        )
+          
+class HybridStochasticMcKlItemSelector(McKlItemSelector):
+    description = "Hybrid Stochastic MC-KL selector"
+    def __init__(self, scoring, **kwargs):
+        self.deterministic = False
+        super(HybridStochasticMcKlItemSelector, self).__init__(
+            scoring=scoring, deterministic=False, hybrid=True, **kwargs
+        )
