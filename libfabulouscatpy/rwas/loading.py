@@ -50,15 +50,25 @@
 #
 ###############################################################################
 
-from libfabulouscatpy.rwas import loading
+import json
+from pathlib import Path
+
+import pkg_resources
 
 
-class Simulator(object):
-    pass
+class ItemDatabase(object):
+    """
+    Load items recursively from the path
+    """
 
-def main():
-    itemdb = loading.ItemDatabase()
-    return
+    def __init__(self):
+        path = pkg_resources.resource_filename(
+                "libfabulouscatpy", f"rwas/factorized/"
 
-if __name__ == "__main__":
-    main()
+        )
+        items = []
+        for elem in Path(path).rglob("*.json"):
+            items += [json.load(open(elem, "r"))]
+
+        self.items = items
+        self.pos = 0
