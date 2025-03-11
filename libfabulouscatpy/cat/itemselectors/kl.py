@@ -234,6 +234,7 @@ class McKlItemSelector(KLItemSelector):
         item_labels = [x['item'] for x in in_scale]
         
         crit = []
+        
         for theta in ability_samples:
             x = model.sample(theta)
             x_ = {k['item']: x[k['item']] for k in in_scale}
@@ -241,12 +242,14 @@ class McKlItemSelector(KLItemSelector):
             ndx = np.array(list(x_.values()))
             lpi_infty = observed_energy + ll_over_grid
             p_itemized_ = np.take_along_axis(p_itemized, ndx[np.newaxis, :, np.newaxis], axis=-1)[..., 0]
+            lp_itemized_ = np.take_along_axis(lp_itemized, ndx[np.newaxis, :, np.newaxis], axis=-1)[..., 0]
+
             lpi_infty -= np.max(lpi_infty)
             pi_infty = np.exp(lpi_infty)
             z = np.trapz(pi_infty, scoring.interpolation_pts[scale])
             pi_infty /= z
-            B = np.trapz(p_itemized_ * observed_density[:, np.newaxis], scoring.interpolation_pts[scale], axis=0)
-            A = np.trapz(np.log(p_itemized_) * pi_infty[:, np.newaxis], scoring.interpolation_pts[scale], axis=0)
+            B = np.log(np.trapz(p_itemized_ * observed_density[:, np.newaxis], scoring.interpolation_pts[scale], axis=0))
+            A = np.trapz(lp_itemized_ * pi_infty[:, np.newaxis], scoring.interpolation_pts[scale], axis=0)
             crit += [B-A]
         crit = np.mean(crit, axis=0)
         return dict(zip(item_labels, crit))

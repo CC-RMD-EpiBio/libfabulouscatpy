@@ -50,6 +50,7 @@
 #
 ###############################################################################
 
+from libfabulouscatpy.irt.prediction.grm import FactorizedIRTModel
 from libfabulouscatpy.rwas import loading
 
 
@@ -58,6 +59,9 @@ class Simulator(object):
 
 def main():
     itemdb = loading.ItemDatabase()
+    scaledb = loading.ScaleDatabase()
+    models = FactorizedIRTModel(itemdb, scaledb)
+    
     return
 
 if __name__ == "__main__":

@@ -72,3 +72,19 @@ class ItemDatabase(object):
 
         self.items = items
         self.pos = 0
+
+class ScaleDatabase(object):
+    def __init__(self):
+        self.scales = {
+        "A": {
+            "name": "A",
+            "loc": 0,
+            "scale": 1
+            },
+        "B": {
+            "name": "B",
+            "loc": 0,
+            "scale": 1
+        }
+        }
+        return
