@@ -50,19 +50,41 @@
 #
 ###############################################################################
 
-from libfabulouscatpy.irt.prediction.grm import FactorizedIRTModel
-from libfabulouscatpy.rwas import loading
+import json
+from pathlib import Path
+
+import pkg_resources
 
 
-class Simulator(object):
-    pass
+class ItemDatabase(object):
+    """
+    Load items recursively from the path
+    """
 
-def main():
-    itemdb = loading.ItemDatabase()
-    scaledb = loading.ScaleDatabase()
-    models = FactorizedIRTModel(itemdb, scaledb)
-    
-    return
+    def __init__(self):
+        path = pkg_resources.resource_filename(
+                "libfabulouscatpy", f"rwas/factorized/"
 
-if __name__ == "__main__":
-    main()
+        )
+        items = []
+        for elem in Path(path).rglob("*.json"):
+            items += [json.load(open(elem, "r"))]
+
+        self.items = items
+        self.pos = 0
+
+class ScaleDatabase(object):
+    def __init__(self):
+        self.scales = {
+        "A": {
+            "name": "A",
+            "loc": 0,
+            "scale": 1
+            },
+        "B": {
+            "name": "B",
+            "loc": 0,
+            "scale": 1
+        }
+        }
+        return

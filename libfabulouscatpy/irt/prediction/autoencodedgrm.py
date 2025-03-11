@@ -74,3 +74,4 @@ class AutoencodedGRM(MultivariateGRM):
         self, theta: npt.ArrayLike | None, responses: dict[str:int] = None
     ):
         return
+    
