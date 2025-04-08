@@ -84,12 +84,13 @@ class ItemSelector(ABC):
         temperature: float = 0.01,
         randomize_items: bool = True,
         randomize_scales: bool = True,
-        unscored_freq: float = 0.33,
-        precision_limit: float = 0.3873,
+        unscored_freq: float = 0.0,
+        precision_limit: float = 0.33333, #0.303, #0.3873,
         min_responses: int = 5,
         max_responses: int = 12,
         inadmissable_scales: list[str] | None = None,
         deterministic: bool = True,
+        omit_items: list[str] | None = None,
         **kwargs,
     ) -> None:
         """Instantiate item selector class
@@ -110,6 +111,7 @@ class ItemSelector(ABC):
         self.randomize_scales = randomize_scales
         self.unscored_freq = unscored_freq
         self.temperature = temperature
+        self.omit_items = omit_items if omit_items is not None else []
         self.items = items
         self.scales = scales
         self.itemdict = {x["item"]: x for x in items}
@@ -137,6 +139,7 @@ class ItemSelector(ABC):
 
         answered = tracker.responses.keys()
         un = [i for i in self.items if i["item"] not in answered]
+        un = [i for i in un if i["item"] not in self.omit_items]
         if scale is not None:
             un = [i for i in un if "scales" in i.keys()]
             un = [i for i in un if scale in i["scales"].keys()]
@@ -262,6 +265,7 @@ class ItemSelector(ABC):
             if candidate is not None:
                 self.unscored_count += 1
                 return candidate
+            
         return self._next_scored_item(tracker, scale)
     
     @abstractmethod
@@ -291,7 +295,7 @@ class ItemSelector(ABC):
         variance = list(criterion.values())
         
         variance /= np.max(variance)
-        probs = np.exp(-variance) ** (1 / self.temperature)
+        probs = np.exp(-variance / self.temperature)
         probs /= np.sum(probs)
 
         if self.deterministic:
@@ -356,6 +360,7 @@ class ItemSelector(ABC):
                 session.errors[proposed_scale] is not None
                 and (session.errors[proposed_scale] < self.PRECISION_LIMIT)
                 and unskipped >= self.PRECISION_RESPONSE_MINIMUM
+                and unskipped <= self.max_responses
             ):
                 # print(f"closing scale: {proposed_scale} with {unskipped} responses", file=sys.stderr)
 
