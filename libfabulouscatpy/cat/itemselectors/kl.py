@@ -106,10 +106,12 @@ class KLItemSelector(ItemSelector):
         
         lp_infty = lp_itemized + energy[:, np.newaxis, np.newaxis]
         # N_grid x N_item x K
-        pi_infty = np.exp(lp_infty - np.max(lp_infty, axis=0, keepdims=True))
+        expected_lp_infty = np.sum(lp_infty*p_itemized, axis=-1, keepdims=True)
+        # N_grid x N_item x 1
+        pi_infty = np.exp(expected_lp_infty - np.max(expected_lp_infty, axis=0, keepdims=True))
         pi_infty /= np.trapz(
             y=pi_infty, x=scoring.interpolation_pts[scale], axis=0
-        ) # N_grid x N_item x K
+        ) # N_grid x N_item x 1
         ##########
         # $\pi_\infty$ is computed
         ########
@@ -119,9 +121,8 @@ class KLItemSelector(ItemSelector):
             x=self.scoring.interpolation_pts[scale],
             axis=0,
         )  # p_{ik}^{\alpha_t}
-        expected_pi_infty = np.sum(pi_infty * p_itemized, axis=-1, keepdims=True)
         A = np.trapz(
-            y=expected_pi_infty * lp_itemized, # pi_infty
+            y=pi_infty * lp_itemized, # pi_infty
             x=scoring.interpolation_pts[scale],
             axis=0,
         )  # This is an integral over \theta, A will have shape I x K
@@ -182,50 +183,80 @@ class KLItemSelector(ItemSelector):
         return {}
 
 
-class NegativeKLItemSelector(KLItemSelector):
-    description = """Greedy anti plugin KL selector"""
+class InfinityKLItemSelector(KLItemSelector):
+    description = """Greedy ∞ plugin KL selector """
 
-    def _next_scored_item(
-        
-        self, tracker: CatSessionTracker, scale=None
-        ) -> dict[str : dict[str:Any]]:
-        
-        scale = self.next_scale(tracker)
-        un_items = self.un_items(tracker, scale)
+    def criterion(self, scoring: BayesianScoring, items: list[dict], scale=None) -> dict[str: Any]:
 
-        if un_items is None:
-            # Not sure if this can happen under normal testing, but included as
-            # a safety feature.
-            return None
+        """
+        Parameters: session: instance of CatSession
+        Returns:    item dictionary entry or None
+        """
 
-        trait = tracker.scores[scale]
-        trait = 0.0 if trait is None else trait
-        error = tracker.errors[scale]
-        error = 100.0 if error is None else error
-        
-        criterion = self.criterion(scoring=self.scoring, items = un_items, scale=scale)
-        valid_items = [x['item'] for x in un_items]
-        items = []
-        Delta = []
-        for k, v in criterion.items():
-            if k in valid_items:
-                items += [k]
-                Delta += [v]
-        if len(items) == 0:
+
+        unresponded = [i for i in items if "scales" in i.keys()]
+        in_scale = [i for i in unresponded if scale in i["scales"].keys()]
+
+        if len(in_scale) == 0:
             return {}
-        Delta -= np.max(Delta)
-        probs = np.exp(Delta/self.temperature)
-        probs /= np.sum(probs)
-    
-        if self.deterministic or (self.hybrid  and  ((self.scoring.n_scored[scale] > 3))):
-            ndx = np.argmax(probs)
-        else:
-            ndx = np.random.choice(np.arange(len(criterion.keys())), p=probs)
-        result = list(criterion.keys())[ndx]
-        for i in un_items:
-            if i['item'] == result:
-                return i
-        return {}
+
+        unresponded_ndx = [
+            self.model.item_labels[scale].index(j["item"]) for j in unresponded
+        ]
+
+        #####
+        # current
+        ######
+        energy = self.scoring.log_like[scale] + self.scoring.log_prior[scale]
+
+        ###
+
+        #######
+        # Future
+        lp_itemized = self.model.models[scale].log_likelihood(
+            theta=self.model.interpolation_pts, observed_only=False
+        )[
+            :, unresponded_ndx, :
+        ]  # ll for unobserved items
+        # N_grid x N_item x K
+        p_itemized = np.exp(lp_itemized)
+        pi_density = scoring.scores[scale].density
+        
+        lp_infty = lp_itemized + energy[:, np.newaxis, np.newaxis]
+        # N_grid x N_item x K
+        expected_lp_infty = np.sum(lp_infty*p_itemized, axis=-1, keepdims=True)
+        # N_grid x N_item x 1
+        pi_infty = np.exp(expected_lp_infty - np.max(expected_lp_infty, axis=0, keepdims=True))
+        pi_infty /= np.trapz(
+            y=pi_infty, x=scoring.interpolation_pts[scale], axis=0
+        ) # N_grid x N_item x 1
+        ##########
+        # $\pi_\infty$ is computed
+        ########
+
+        expected_p_itemized = np.trapz(
+            y=pi_infty[:, np.newaxis, np.newaxis] * p_itemized,
+            x=self.scoring.interpolation_pts[scale],
+            axis=0,
+        )  # p_{ik}^{\alpha_t}
+        A = np.trapz(
+            y=pi_infty * lp_itemized, # pi_infty
+            x=scoring.interpolation_pts[scale],
+            axis=0,
+        )  # This is an integral over \theta, A will have shape I x K
+        A = np.sum(A * expected_p_itemized, axis=-1) # Now A has shape I
+        B = np.log(
+            np.trapz(
+                y=pi_density[:, np.newaxis, np.newaxis] * p_itemized,
+                x=scoring.interpolation_pts[scale],
+                axis=0,
+            )
+        ) # this is an integral over theta, B has shape I x K
+        B = np.sum(B * expected_p_itemized, axis=-1) # now B has shape I
+        
+        Delta = -A + B
+        criterion = dict(zip([x['item'] for x in items], Delta))
+        return criterion
     
 class StochasticKLItemSelector(KLItemSelector):
     description = "Stochastic KL selector"
@@ -233,6 +264,15 @@ class StochasticKLItemSelector(KLItemSelector):
     def __init__(self, scoring, **kwargs):
         self.deterministic = False
         super(StochasticKLItemSelector, self).__init__(
+            scoring=scoring, deterministic=False, **kwargs
+        )
+        
+class StochasticInfinityKLItemSelector(InfinityKLItemSelector):
+    description = "Stochastic ∞ KL selector"
+
+    def __init__(self, scoring, **kwargs):
+        self.deterministic = False
+        super(StochasticInfinityKLItemSelector, self).__init__(
             scoring=scoring, deterministic=False, **kwargs
         )
 
