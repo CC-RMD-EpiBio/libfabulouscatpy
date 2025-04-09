@@ -100,14 +100,18 @@ class KLItemSelector(ItemSelector):
         )[
             :, unresponded_ndx, :
         ]  # ll for unobserved items
+        # N_grid x N_item x K
         p_itemized = np.exp(lp_itemized)
         pi_density = scoring.scores[scale].density
         
         lp_infty = lp_itemized + energy[:, np.newaxis, np.newaxis]
-        pi_infty = np.exp(lp_infty - np.max(lp_infty, axis=0, keepdims=True))
+        # N_grid x N_item x K
+        expected_lp_infty = np.sum(lp_infty*p_itemized, axis=-1, keepdims=True)
+        # N_grid x N_item x 1
+        pi_infty = np.exp(expected_lp_infty - np.max(expected_lp_infty, axis=0, keepdims=True))
         pi_infty /= np.trapz(
             y=pi_infty, x=scoring.interpolation_pts[scale], axis=0
-        )
+        ) # N_grid x N_item x 1
         ##########
         # $\pi_\infty$ is computed
         ########
@@ -117,9 +121,8 @@ class KLItemSelector(ItemSelector):
             x=self.scoring.interpolation_pts[scale],
             axis=0,
         )  # p_{ik}^{\alpha_t}
-
         A = np.trapz(
-            y=pi_infty * lp_itemized,
+            y=pi_infty * lp_itemized, # pi_infty
             x=scoring.interpolation_pts[scale],
             axis=0,
         )  # This is an integral over \theta, A will have shape I x K
@@ -165,11 +168,11 @@ class KLItemSelector(ItemSelector):
                 Delta += [v]
         if len(items) == 0:
             return {}
-        Delta -= np.max(Delta)
+        Delta -= np.min(Delta)
         probs = np.exp(-Delta/self.temperature)
         probs /= np.sum(probs)
     
-        if self.deterministic or (self.hybrid  and  ((self.scoring.n_scored[scale] > 1))):
+        if self.deterministic or (self.hybrid  and  ((self.scoring.n_scored[scale] > 3))):
             ndx = np.argmax(probs)
         else:
             ndx = np.random.choice(np.arange(len(criterion.keys())), p=probs)
@@ -180,12 +183,96 @@ class KLItemSelector(ItemSelector):
         return {}
 
 
+class InfinityKLItemSelector(KLItemSelector):
+    description = """Greedy ∞ plugin KL selector """
+
+    def criterion(self, scoring: BayesianScoring, items: list[dict], scale=None) -> dict[str: Any]:
+
+        """
+        Parameters: session: instance of CatSession
+        Returns:    item dictionary entry or None
+        """
+
+
+        unresponded = [i for i in items if "scales" in i.keys()]
+        in_scale = [i for i in unresponded if scale in i["scales"].keys()]
+
+        if len(in_scale) == 0:
+            return {}
+
+        unresponded_ndx = [
+            self.model.item_labels[scale].index(j["item"]) for j in unresponded
+        ]
+
+        #####
+        # current
+        ######
+        energy = self.scoring.log_like[scale] + self.scoring.log_prior[scale]
+
+        ###
+
+        #######
+        # Future
+        lp_itemized = self.model.models[scale].log_likelihood(
+            theta=self.model.interpolation_pts, observed_only=False
+        )[
+            :, unresponded_ndx, :
+        ]  # ll for unobserved items
+        # N_grid x N_item x K
+        p_itemized = np.exp(lp_itemized)
+        pi_density = scoring.scores[scale].density
+        
+        lp_infty = lp_itemized + energy[:, np.newaxis, np.newaxis]
+        # N_grid x N_item x K
+        expected_lp_infty = np.sum(lp_infty*p_itemized, axis=-1, keepdims=True)
+        # N_grid x N_item x 1
+        pi_infty = np.exp(expected_lp_infty - np.max(expected_lp_infty, axis=0, keepdims=True))
+        pi_infty /= np.trapz(
+            y=pi_infty, x=scoring.interpolation_pts[scale], axis=0
+        ) # N_grid x N_item x 1
+        ##########
+        # $\pi_\infty$ is computed
+        ########
+
+        expected_p_itemized = np.trapz(
+            y=pi_infty[:, np.newaxis, np.newaxis] * p_itemized,
+            x=self.scoring.interpolation_pts[scale],
+            axis=0,
+        )  # p_{ik}^{\alpha_t}
+        A = np.trapz(
+            y=pi_infty * lp_itemized, # pi_infty
+            x=scoring.interpolation_pts[scale],
+            axis=0,
+        )  # This is an integral over \theta, A will have shape I x K
+        A = np.sum(A * expected_p_itemized, axis=-1) # Now A has shape I
+        B = np.log(
+            np.trapz(
+                y=pi_density[:, np.newaxis, np.newaxis] * p_itemized,
+                x=scoring.interpolation_pts[scale],
+                axis=0,
+            )
+        ) # this is an integral over theta, B has shape I x K
+        B = np.sum(B * expected_p_itemized, axis=-1) # now B has shape I
+        
+        Delta = -A + B
+        criterion = dict(zip([x['item'] for x in items], Delta))
+        return criterion
+    
 class StochasticKLItemSelector(KLItemSelector):
     description = "Stochastic KL selector"
 
     def __init__(self, scoring, **kwargs):
         self.deterministic = False
         super(StochasticKLItemSelector, self).__init__(
+            scoring=scoring, deterministic=False, **kwargs
+        )
+        
+class StochasticInfinityKLItemSelector(InfinityKLItemSelector):
+    description = "Stochastic ∞ KL selector"
+
+    def __init__(self, scoring, **kwargs):
+        self.deterministic = False
+        super(StochasticInfinityKLItemSelector, self).__init__(
             scoring=scoring, deterministic=False, **kwargs
         )
 

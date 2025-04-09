@@ -77,7 +77,7 @@ class BayesianScoring(ScoringBase):
             if log_prior_fn is not None:
                 self.log_prior[scale] = self.log_prior_fn[scale](model.interpolation_pts)
             else:
-                self.log_prior[scale] = 0 
+                self.log_prior[scale] = -model.interpolation_pts**2/(1*2)
             self.interpolation_pts[scale] = model.interpolation_pts
         self.score_responses({})
         
