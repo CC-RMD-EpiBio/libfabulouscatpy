@@ -107,6 +107,7 @@ class KLItemSelector(ItemSelector):
         lp_infty = lp_itemized + energy[:, np.newaxis, np.newaxis]
         # N_grid x N_item x K
         expected_lp_infty = np.sum(lp_infty*p_itemized, axis=-1, keepdims=True)
+        expected_lp_infty = np.sum(expected_lp_infty, axis=-2, keepdims=True)
         # N_grid x N_item x 1
         pi_infty = np.exp(expected_lp_infty - np.max(expected_lp_infty, axis=0, keepdims=True))
         pi_infty /= np.trapz(
@@ -226,6 +227,7 @@ class InfinityKLItemSelector(KLItemSelector):
         # N_grid x N_item x K
         expected_lp_infty = np.sum(lp_infty*p_itemized, axis=-1, keepdims=True)
         # N_grid x N_item x 1
+        expected_lp_infty = np.sum(expected_lp_infty, axis=-2, keepdims=True)
         pi_infty = np.exp(expected_lp_infty - np.max(expected_lp_infty, axis=0, keepdims=True))
         pi_infty /= np.trapz(
             y=pi_infty, x=scoring.interpolation_pts[scale], axis=0
@@ -235,7 +237,7 @@ class InfinityKLItemSelector(KLItemSelector):
         ########
 
         expected_p_itemized = np.trapz(
-            y=pi_infty[:, np.newaxis, np.newaxis] * p_itemized,
+            y=pi_infty * p_itemized,
             x=self.scoring.interpolation_pts[scale],
             axis=0,
         )  # p_{ik}^{\alpha_t}
