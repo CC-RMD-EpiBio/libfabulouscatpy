@@ -10,32 +10,32 @@
 # of Health and Human Services, which is making the software available to the
 # public for any commercial or non-commercial purpose under the following
 # open-source BSD license.
-# 
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
-# 
+#
 # (1) Redistributions of source code must retain this copyright
 # notice, this list of conditions and the following disclaimer.
-# 
+#
 # (2) Redistributions in binary form must reproduce this copyright
 # notice, this list of conditions and the following disclaimer in the
 # documentation and/or other materials provided with the distribution.
-# 
+#
 # (3) Neither the names of the National Institutes of Health Clinical
 # Center, the National Institutes of Health, the U.S. Department of
 # Health and Human Services, nor the names of any of the software
 # developers may be used to endorse or promote products derived from
 # this software without specific prior written permission.
-# 
+#
 # (4) Please acknowledge NIHCC as the source of this software by including
 # the phrase "Courtesy of the U.S. National Institutes of Health Clinical
 # Center"or "Source: U.S. National Institutes of Health Clinical Center."
-# 
+#
 # THIS SOFTWARE IS PROVIDED BY THE U.S. GOVERNMENT AND CONTRIBUTORS "AS
 # IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
 # TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
 # PARTICULAR PURPOSE ARE DISCLAIMED.
-# 
+#
 # You are under no obligation whatsoever to provide any bug fixes,
 # patches, or upgrades to the features, functionality or performance of
 # the source code ("Enhancements") to anyone; however, if you choose to
@@ -68,13 +68,13 @@ class GlobalInfoSelector(ItemSelector):
         self.hybrid = hybrid
         self.deterministic = deterministic
 
-    def criterion(self, scoring: BayesianScoring, items: list[dict], scale=None) -> dict[str: Any]:
-
+    def criterion(
+        self, scoring: BayesianScoring, items: list[dict], scale=None
+    ) -> dict[str:Any]:
         """
         Parameters: session: instance of CatSession
         Returns:    item dictionary entry or None
         """
-
 
         unresponded = [i for i in items if "scales" in i.keys()]
         in_scale = [i for i in unresponded if scale in i["scales"].keys()]
@@ -106,19 +106,25 @@ class GlobalInfoSelector(ItemSelector):
         )[
             :, unresponded_ndx, :
         ]  #
-        
+
         p_itemized = np.exp(lp_itemized)
         pi_density = scoring.scores[scale].density
 
-        criterion = np.sum(p_itemized*(lp_itemized - lp_point)*pi_density[:, np.newaxis, np.newaxis], axis=0)
+        criterion = np.trapz(
+            p_itemized
+            * (lp_itemized - lp_point)
+            * pi_density[:, np.newaxis, np.newaxis],
+            x=scoring.interpolation_pts[scale],
+            axis=0,
+        )
         criterion = np.sum(criterion, axis=-1)
-        criterion = dict(zip([x['item'] for x in items], criterion))
+        criterion = dict(zip([x["item"] for x in items], criterion))
         return criterion
-    
+
     def _next_scored_item(
         self, tracker: CatSessionTracker, scale=None
-        ) -> dict[str : dict[str:Any]]:
-        
+    ) -> dict[str : dict[str:Any]]:
+
         scale = self.next_scale(tracker)
         un_items = self.un_items(tracker, scale)
 
@@ -131,9 +137,9 @@ class GlobalInfoSelector(ItemSelector):
         trait = 0.0 if trait is None else trait
         error = tracker.errors[scale]
         error = 100.0 if error is None else error
-        
-        criterion = self.criterion(scoring=self.scoring, items = un_items, scale=scale)
-        valid_items = [x['item'] for x in un_items]
+
+        criterion = self.criterion(scoring=self.scoring, items=un_items, scale=scale)
+        valid_items = [x["item"] for x in un_items]
         items = []
         Delta = []
         for k, v in criterion.items():
@@ -143,15 +149,15 @@ class GlobalInfoSelector(ItemSelector):
         if len(items) == 0:
             return {}
         Delta -= np.max(Delta)
-        probs = np.exp(Delta/self.temperature)
+        probs = np.exp(Delta / self.temperature)
         probs /= np.sum(probs)
-    
-        if self.deterministic or (self.hybrid  and  ((self.scoring.n_scored[scale] > 3))):
+
+        if self.deterministic or (self.hybrid and ((self.scoring.n_scored[scale] > 3))):
             ndx = np.argmax(probs)
         else:
             ndx = np.random.choice(np.arange(len(criterion.keys())), p=probs)
         result = list(criterion.keys())[ndx]
         for i in un_items:
-            if i['item'] == result:
+            if i["item"] == result:
                 return i
         return {}
