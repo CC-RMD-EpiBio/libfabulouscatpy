@@ -54,6 +54,7 @@ from typing import Any
 import numpy as np
 
 from libfabulouscatpy.cat.itemselection import ItemSelector
+from libfabulouscatpy.cat.session import CatSessionTracker
 from libfabulouscatpy.irt.scoring import BayesianScoring
 
 
@@ -114,3 +115,43 @@ class GlobalInfoSelector(ItemSelector):
         criterion = dict(zip([x['item'] for x in items], criterion))
         return criterion
     
+    def _next_scored_item(
+        self, tracker: CatSessionTracker, scale=None
+        ) -> dict[str : dict[str:Any]]:
+        
+        scale = self.next_scale(tracker)
+        un_items = self.un_items(tracker, scale)
+
+        if un_items is None:
+            # Not sure if this can happen under normal testing, but included as
+            # a safety feature.
+            return None
+
+        trait = tracker.scores[scale]
+        trait = 0.0 if trait is None else trait
+        error = tracker.errors[scale]
+        error = 100.0 if error is None else error
+        
+        criterion = self.criterion(scoring=self.scoring, items = un_items, scale=scale)
+        valid_items = [x['item'] for x in un_items]
+        items = []
+        Delta = []
+        for k, v in criterion.items():
+            if k in valid_items:
+                items += [k]
+                Delta += [v]
+        if len(items) == 0:
+            return {}
+        Delta -= np.max(Delta)
+        probs = np.exp(Delta/self.temperature)
+        probs /= np.sum(probs)
+    
+        if self.deterministic or (self.hybrid  and  ((self.scoring.n_scored[scale] > 3))):
+            ndx = np.argmax(probs)
+        else:
+            ndx = np.random.choice(np.arange(len(criterion.keys())), p=probs)
+        result = list(criterion.keys())[ndx]
+        for i in un_items:
+            if i['item'] == result:
+                return i
+        return {}
