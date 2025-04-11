@@ -88,9 +88,7 @@ class FisherItemSelector(ItemSelector):
 
         return fish_scored
     
-
-
-class StochasticFisherItemSelector(ItemSelector):
+class StochasticFisherItemSelector(FisherItemSelector):
     
     description = """Selection based on Fisher information"""
 

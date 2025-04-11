@@ -292,10 +292,10 @@ class ItemSelector(ABC):
         
         criterion = self.criterion(scoring=self.scoring, items = un_items, scale=scale)
 
-        variance = list(criterion.values())
+        criterion = list(criterion.values())
         
-        variance /= np.max(variance)
-        probs = np.exp(-variance / self.temperature)
+        criterion -= np.max(criterion)
+        probs = np.exp(criterion / self.temperature)
         probs /= np.sum(probs)
 
         if self.deterministic:

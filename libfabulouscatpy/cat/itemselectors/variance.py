@@ -38,6 +38,7 @@ class VarianceItemSelector(ItemSelector):
 
         # previously observed
         energy = self.scoring.log_like[scale] + self.scoring.log_prior[scale]
+        pi_now = scoring.scores[scale].density
 
         ###
 
@@ -45,6 +46,8 @@ class VarianceItemSelector(ItemSelector):
         # Future
 
         lp_infty = log_ell + energy[:, np.newaxis, np.newaxis]
+        p_now = np.exp(log_ell)
+        p_now = np.sum(pi_now[:, np.newaxis, np.newaxis]*p_now, axis=0)
         pi_infty = np.exp(lp_infty - np.max(lp_infty, axis=0, keepdims=True))
         pi_infty /= np.trapz(
             y=pi_infty, x=self.scoring.interpolation_pts[scale], axis=0
@@ -62,9 +65,9 @@ class VarianceItemSelector(ItemSelector):
             x=self.scoring.interpolation_pts[scale],
             axis=0,
         )
+        mean = np.sum(mean*p_now, axis=-1)
+        second = np.sum(second*p_now, axis=-1)
         variance = second - mean**2
-        variance = np.sum(variance * np.exp(log_ell) * pi_infty, axis=-1)
-        variance = np.sum(variance, axis=0)
         
         criterion = dict(zip([x['item'] for x in items], variance))
         return criterion
@@ -93,7 +96,7 @@ class VarianceItemSelector(ItemSelector):
         variance = list(criterion.values())
         
         variance /= np.max(variance)
-        probs = np.exp(-variance) ** (1 / self.temperature)
+        probs = np.exp(-variance / self.temperature)
         probs /= np.sum(probs)
 
         if self.deterministic:

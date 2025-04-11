@@ -104,15 +104,19 @@ class KLItemSelector(ItemSelector):
         p_itemized = np.exp(lp_itemized)
         pi_density = scoring.scores[scale].density
         
-        lp_infty = lp_itemized + energy[:, np.newaxis, np.newaxis]
+        # lp_infty = lp_itemized + energy[:, np.newaxis, np.newaxis]
+        lp_infty = 0.5*lp_itemized + energy[:, np.newaxis, np.newaxis] * (lp_itemized.shape[1] - 1)/2
         # N_grid x N_item x K
         expected_lp_infty = np.sum(lp_infty*p_itemized, axis=-1, keepdims=True)
         expected_lp_infty = np.sum(expected_lp_infty, axis=-2, keepdims=True)
-        # N_grid x N_item x 1
+        # shift it so that it is closer to the running estimate
+        
+        
+        # N_grid x 1 x 1
         pi_infty = np.exp(expected_lp_infty - np.max(expected_lp_infty, axis=0, keepdims=True))
         pi_infty /= np.trapz(
             y=pi_infty, x=scoring.interpolation_pts[scale], axis=0
-        ) # N_grid x N_item x 1
+        ) # N_grid x 1 x 1
         ##########
         # $\pi_\infty$ is computed
         ########
@@ -223,7 +227,9 @@ class InfinityKLItemSelector(KLItemSelector):
         p_itemized = np.exp(lp_itemized)
         pi_density = scoring.scores[scale].density
         
-        lp_infty = lp_itemized + energy[:, np.newaxis, np.newaxis]
+        # lp_infty = lp_itemized + energy[:, np.newaxis, np.newaxis]
+        lp_infty = 0.5*lp_itemized + energy[:, np.newaxis, np.newaxis] * (lp_itemized.shape[1] - 1)/2
+
         # N_grid x N_item x K
         expected_lp_infty = np.sum(lp_infty*p_itemized, axis=-1, keepdims=True)
         # N_grid x N_item x 1
@@ -231,7 +237,7 @@ class InfinityKLItemSelector(KLItemSelector):
         pi_infty = np.exp(expected_lp_infty - np.max(expected_lp_infty, axis=0, keepdims=True))
         pi_infty /= np.trapz(
             y=pi_infty, x=scoring.interpolation_pts[scale], axis=0
-        ) # N_grid x N_item x 1
+        ) # N_grid x 1 x 1
         ##########
         # $\pi_\infty$ is computed
         ########
