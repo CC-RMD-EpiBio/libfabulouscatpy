@@ -60,7 +60,7 @@ from libfabulouscatpy.irt.scoring import BayesianScoring
 
 class KLItemSelector(ItemSelector):
 
-    description = """Greedy plugin KL selector"""
+    description = """Greedy KL selector"""
 
     def __init__(self, scoring, deterministic=True, hybrid=False, em_iters=4, **kwargs):
         super(KLItemSelector, self).__init__(**kwargs)
