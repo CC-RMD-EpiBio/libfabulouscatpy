@@ -48,7 +48,7 @@
 # derivative works thereof, in binary and source code form.
 #
 ###############################################################################
-# D(pi(\theta|x_t) || pi(\theta|x_t+1))
+# H(pi(\theta|x_t) || pi(\theta|x_t+1))
 
 from typing import Any
 
@@ -59,15 +59,14 @@ from libfabulouscatpy.cat.itemselection import ItemSelector
 from libfabulouscatpy.irt.scoring import BayesianScoring
 
 
-class KLItemSelector(ItemSelector):
+class CrossEntropyItemSelector(ItemSelector):
 
-    description = """Greedy KL selector"""
+    description = """Greedy CE selector"""
 
-    def __init__(self, scoring, deterministic=True, hybrid=False, em_iters=10, **kwargs):
-        super(KLItemSelector, self).__init__(**kwargs)
+    def __init__(self, scoring, deterministic=True, hybrid=False,  **kwargs):
+        super(CrossEntropyItemSelector, self).__init__(**kwargs)
         self.scoring = scoring
         self.hybrid = hybrid
-        self.em_iters = em_iters
         self.deterministic = deterministic
 
     def criterion(
@@ -111,12 +110,12 @@ class KLItemSelector(ItemSelector):
         q_z /= np.sum(q_z, axis=-1, keepdims=True)
 
         lpi_next = lpi_density_t[:, np.newaxis, np.newaxis] + lp_itemized
-        KL = pi_density_t[:, np.newaxis, np.newaxis]*(lpi_density_t[:, np.newaxis, np.newaxis] - lpi_next)
-        KL = np.trapz(KL, self.model.interpolation_pts, axis=0)
-        KL = np.sum(KL*q_z, axis=-1)
-        criterion = dict(zip([x["item"] for x in items], KL))
+        CE = pi_density_t[:, np.newaxis, np.newaxis]*( - lpi_next)
+        CE = np.trapz(CE, self.model.interpolation_pts, axis=0)
+        CE = np.sum(CE*q_z, axis=-1)
+        criterion = dict(zip([x["item"] for x in items], CE))
         return criterion
-
+    
     def _next_scored_item(
         self, tracker: CatSessionTracker, scale=None
     ) -> dict[str : dict[str:Any]]:
@@ -159,21 +158,21 @@ class KLItemSelector(ItemSelector):
         return {}
 
 
-class StochasticKLItemSelector(KLItemSelector):
-    description = "Stochastic KL selector"
+class StochasticCrossEntropyItemSelector(CrossEntropyItemSelector):
+    description = "Stochastic CE selector"
 
     def __init__(self, scoring, **kwargs):
         self.deterministic = False
-        super(StochasticKLItemSelector, self).__init__(
+        super(StochasticCrossEntropyItemSelector, self).__init__(
             scoring=scoring, deterministic=False, **kwargs
         )
 
 
-class HybridStochasticKLItemSelector(KLItemSelector):
-    description = "Hybrid Stochastic KL selector"
+class HybridStochasticCrossEntropyItemSelector(CrossEntropyItemSelector):
+    description = "Hybrid Stochastic CE selector"
 
     def __init__(self, scoring, **kwargs):
         self.deterministic = False
-        super(HybridStochasticKLItemSelector, self).__init__(
+        super(HybridStochasticCrossEntropyItemSelector, self).__init__(
             scoring=scoring, deterministic=False, hybrid=True, **kwargs
         )
