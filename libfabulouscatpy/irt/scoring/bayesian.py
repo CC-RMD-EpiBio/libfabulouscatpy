@@ -26,7 +26,7 @@ class BayesianScore(ScoreBase):
         self.interpolation_pts = interpolation_pts
         z = np.trapz(y=density, x=interpolation_pts)
         score = np.trapz(y=density * interpolation_pts, x=interpolation_pts)/z
-        cdf = integrate.cumtrapz(density, interpolation_pts, initial=0)/z
+        cdf = integrate.cumulative_trapezoid(density, interpolation_pts, initial=0)/z
         variance = np.trapz(y=density * interpolation_pts**2, x=interpolation_pts)/z - score**2
         median = np.interp(0.5, cdf, interpolation_pts)
         
