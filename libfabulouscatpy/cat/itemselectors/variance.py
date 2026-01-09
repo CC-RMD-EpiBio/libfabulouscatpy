@@ -9,7 +9,7 @@ from libfabulouscatpy.irt.scoring import BayesianScoring
 
 class VarianceItemSelector(ItemSelector):
 
-    description = """Bayesian variance selector"""
+    description = """Greedy variance"""
 
     def __init__(self, scoring, **kwargs):
         super(VarianceItemSelector, self).__init__(**kwargs)
@@ -108,7 +108,7 @@ class VarianceItemSelector(ItemSelector):
 
 
 class StochasticVarianceItemSelector(VarianceItemSelector):
-    description = "Stochastic variance selector"
+    description = "Stochastic variance"
 
     def __init__(self, scoring, **kwargs):
         super(StochasticVarianceItemSelector, self).__init__(

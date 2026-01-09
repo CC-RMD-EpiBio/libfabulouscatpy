@@ -61,7 +61,7 @@ from libfabulouscatpy.irt.scoring import BayesianScoring
 
 class KLItemSelector(ItemSelector):
 
-    description = """Greedy KL selector"""
+    description = """Greedy KL"""
 
     def __init__(self, scoring, deterministic=True, hybrid=False, em_iters=10, **kwargs):
         super(KLItemSelector, self).__init__(**kwargs)
@@ -160,7 +160,7 @@ class KLItemSelector(ItemSelector):
 
 
 class StochasticKLItemSelector(KLItemSelector):
-    description = "Stochastic KL selector"
+    description = "Stochastic KL"
 
     def __init__(self, scoring, **kwargs):
         self.deterministic = False
@@ -170,7 +170,7 @@ class StochasticKLItemSelector(KLItemSelector):
 
 
 class HybridStochasticKLItemSelector(KLItemSelector):
-    description = "Hybrid Stochastic KL selector"
+    description = "Hybrid Stochastic KL"
 
     def __init__(self, scoring, **kwargs):
         self.deterministic = False

@@ -61,7 +61,7 @@ from libfabulouscatpy.irt.scoring import BayesianScoring
 
 class CrossEntropyItemSelector(ItemSelector):
 
-    description = """Greedy CE selector"""
+    description = """Greedy CE"""
 
     def __init__(self, scoring, deterministic=True, hybrid=False,  **kwargs):
         super(CrossEntropyItemSelector, self).__init__(**kwargs)
@@ -159,7 +159,7 @@ class CrossEntropyItemSelector(ItemSelector):
 
 
 class StochasticCrossEntropyItemSelector(CrossEntropyItemSelector):
-    description = "Stochastic CE selector"
+    description = "Stochastic CE"
 
     def __init__(self, scoring, **kwargs):
         self.deterministic = False
@@ -169,7 +169,7 @@ class StochasticCrossEntropyItemSelector(CrossEntropyItemSelector):
 
 
 class HybridStochasticCrossEntropyItemSelector(CrossEntropyItemSelector):
-    description = "Hybrid Stochastic CE selector"
+    description = "Hybrid Stochastic CE"
 
     def __init__(self, scoring, **kwargs):
         self.deterministic = False
