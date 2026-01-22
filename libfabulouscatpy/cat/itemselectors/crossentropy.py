@@ -61,7 +61,7 @@ from libfabulouscatpy.irt.scoring import BayesianScoring
 
 class CrossEntropyItemSelector(ItemSelector):
 
-    description = """Greedy CE"""
+    description = """Cross Entropy"""
 
     def __init__(self, scoring, deterministic=True, hybrid=False,  **kwargs):
         super(CrossEntropyItemSelector, self).__init__(**kwargs)

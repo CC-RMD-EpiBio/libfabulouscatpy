@@ -60,7 +60,7 @@ from libfabulouscatpy.irt.scoring import BayesianScoring
 
 class GlobalInfoSelector(ItemSelector):
 
-    description = """Greedy GI"""
+    description = """Global Information"""
 
     def __init__(self, scoring, deterministic=True, hybrid=False, **kwargs):
         super(GlobalInfoSelector, self).__init__(**kwargs)

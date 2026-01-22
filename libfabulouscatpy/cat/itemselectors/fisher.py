@@ -51,16 +51,13 @@
 
 from typing import Any
 
-import numpy as np
-
 from libfabulouscatpy.cat.itemselection import ItemSelector
-from libfabulouscatpy.cat.session import CatSessionTracker
 from libfabulouscatpy.irt.scoring import BayesianScoring
 
 
 class FisherItemSelector(ItemSelector):
     
-    description = """Greedy FI"""
+    description = """Fisher Information"""
     def __init__(self, scoring, deterministic=True, **kwargs):
         super(FisherItemSelector, self).__init__(**kwargs)
         self.scoring = scoring
@@ -87,35 +84,6 @@ class FisherItemSelector(ItemSelector):
         fish_scored = {i["item"]: item_info[i['item']][0] for i in in_scale}
 
         return fish_scored
-    
-class StochasticFisherItemSelector(FisherItemSelector):
-    
-    description = """Selection based on Fisher information"""
-
-    def _next_scored_item(self, tracker: CatSessionTracker, scale=None) -> dict[str: dict[str:Any]]:
-        """
-        Parameters: session: instance of CatSessionTracker
-        Returns:    item dictionary entry or None
-        """
-        if scale is None:
-            scale = self.next_scale(tracker)
-        un_items = self.un_items(tracker, scale)
-
-        if un_items is None:
-            # Not sure if this can happen under normal testing, but included as
-            # a safety feature.
-            return {}
-        
-        fish_scored = self.criterion(tracker, scale)
-        probs = np.array(fish_scored) ** (1/self.temperature)
-        probs /= np.sum(probs)
-
-        if self.deterministic:
-            ndx = np.argmax(probs)
-        else:
-            ndx = np.random.choice(np.arange(len(probs)), p=probs)
-        result = fish_scored.keys()[ndx]
-        return result
 
 
 class StochasticFisherItemSelector(FisherItemSelector):

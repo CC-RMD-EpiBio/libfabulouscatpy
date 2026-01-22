@@ -58,7 +58,7 @@ from libfabulouscatpy.irt.scoring import BayesianScoring
 
 
 class BayesianFisherItemSelector(ItemSelector):
-    description = """Greedy BF"""
+    description = """Bayesian Fisher Information"""
 
     def __init__(self, scoring, **kwargs):
         super(BayesianFisherItemSelector, self).__init__(**kwargs)
@@ -98,7 +98,7 @@ class BayesianFisherItemSelector(ItemSelector):
 
 
 class StochasticBayesianFisherItemSelector(BayesianFisherItemSelector):
-    description = "Stochastic BF"
+    description = "Stochastic BFI"
     def __init__(self, scoring, **kwargs):
         super(StochasticBayesianFisherItemSelector, self).__init__(
             scoring=scoring, deterministic=False, **kwargs
