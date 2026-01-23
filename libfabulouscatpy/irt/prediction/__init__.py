@@ -53,5 +53,12 @@
 from .autoencodedgrm import AutoencodedGRM
 from .grm import GradedResponseModel, MultivariateGRM
 from .irt import IRTModel
+from .neural_irt import NeuralIRTModel
 
-__all__ = ["GradedResponseModel", "MultivariateGRM", "IRTModel", "AutoencodedGRM"]
+__all__ = [
+    "GradedResponseModel",
+    "MultivariateGRM",
+    "IRTModel",
+    "AutoencodedGRM",
+    "NeuralIRTModel",
+]
