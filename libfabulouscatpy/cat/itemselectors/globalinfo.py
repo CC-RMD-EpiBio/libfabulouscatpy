@@ -53,6 +53,7 @@ from typing import Any
 
 import numpy as np
 
+from libfabulouscatpy._compat import trapz as _trapz
 from libfabulouscatpy.cat.itemselection import ItemSelector
 from libfabulouscatpy.cat.session import CatSessionTracker
 from libfabulouscatpy.irt.scoring import BayesianScoring
@@ -110,7 +111,7 @@ class GlobalInfoSelector(ItemSelector):
         p_itemized = np.exp(lp_itemized)
         pi_density = scoring.scores[scale].density
 
-        criterion = np.trapz(
+        criterion = _trapz(
             p_itemized
             * (lp_itemized - lp_point)
             * pi_density[:, np.newaxis, np.newaxis],

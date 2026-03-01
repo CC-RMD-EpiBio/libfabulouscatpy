@@ -2,6 +2,7 @@ from typing import Any
 
 import numpy as np
 
+from libfabulouscatpy._compat import trapz as _trapz
 from libfabulouscatpy.cat.itemselection import ItemSelector
 from libfabulouscatpy.cat.session import CatSessionTracker
 from libfabulouscatpy.irt.scoring import BayesianScoring
@@ -49,17 +50,17 @@ class VarianceItemSelector(ItemSelector):
         p_now = np.exp(log_ell)
         p_now = np.sum(pi_now[:, np.newaxis, np.newaxis]*p_now, axis=0)
         pi_infty = np.exp(lp_infty - np.max(lp_infty, axis=0, keepdims=True))
-        pi_infty /= np.trapz(
+        pi_infty /= _trapz(
             y=pi_infty, x=self.scoring.interpolation_pts[scale], axis=0
         )
         ##########
-        mean = np.trapz(
+        mean = _trapz(
             y=pi_infty
             * self.scoring.interpolation_pts[scale][:, np.newaxis, np.newaxis],
             x=self.scoring.interpolation_pts[scale],
             axis=0,
         )
-        second = np.trapz(
+        second = _trapz(
             y=pi_infty
             * self.scoring.interpolation_pts[scale][:, np.newaxis, np.newaxis] ** 2,
             x=self.scoring.interpolation_pts[scale],

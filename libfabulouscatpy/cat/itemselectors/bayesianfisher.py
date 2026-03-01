@@ -53,6 +53,7 @@ from typing import Any
 
 import numpy as np
 
+from libfabulouscatpy._compat import trapz as _trapz
 from libfabulouscatpy.cat.itemselection import ItemSelector
 from libfabulouscatpy.irt.scoring import BayesianScoring
 
@@ -82,11 +83,11 @@ class BayesianFisherItemSelector(ItemSelector):
             abilities=scoring.interpolation_pts,
         )
         fish_scored = [
-            np.trapz(
+            _trapz(
                 y=item_info[i["item"]] * scoring.scores[scale].density,
                 x=scoring.interpolation_pts[scale],
             )
-            / np.trapz(
+            / _trapz(
                 y=scoring.scores[scale].density,
                 x=scoring.interpolation_pts[scale],
             )

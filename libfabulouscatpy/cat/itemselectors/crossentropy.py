@@ -55,6 +55,7 @@ from typing import Any
 import numpy as np
 from fabulouscat.models.session import CatSessionTracker
 
+from libfabulouscatpy._compat import trapz as _trapz
 from libfabulouscatpy.cat.itemselection import ItemSelector
 from libfabulouscatpy.irt.scoring import BayesianScoring
 
@@ -102,7 +103,7 @@ class CrossEntropyItemSelector(ItemSelector):
 
         pi_density_t = self.scoring.scores[scale].density  # initial guess
         lpi_density_t = self.scoring.log_like[scale] + self.scoring.log_prior[scale]
-        q_z = np.trapz(
+        q_z = _trapz(
             np.exp(lp_itemized) * pi_density_t[:, np.newaxis, np.newaxis],
             self.model.interpolation_pts,
             axis=0,
@@ -111,7 +112,7 @@ class CrossEntropyItemSelector(ItemSelector):
 
         lpi_next = lpi_density_t[:, np.newaxis, np.newaxis] + lp_itemized
         CE = pi_density_t[:, np.newaxis, np.newaxis]*( - lpi_next)
-        CE = np.trapz(CE, self.model.interpolation_pts, axis=0)
+        CE = _trapz(CE, self.model.interpolation_pts, axis=0)
         CE = np.sum(CE*q_z, axis=-1)
         criterion = dict(zip([x["item"] for x in items], CE))
         return criterion
