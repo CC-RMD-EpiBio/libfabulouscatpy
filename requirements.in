@@ -1,7 +1,7 @@
-# Core dependencies
-numpy>=1.20
-scipy>=1.7
-xarray>=2022.0
+# Core
+numpy
+scipy
+xarray
 
-# Development/testing
-pytest>=7.0
+# Dev/test
+pytest
