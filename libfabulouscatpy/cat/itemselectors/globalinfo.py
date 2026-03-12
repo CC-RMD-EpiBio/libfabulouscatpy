@@ -90,7 +90,7 @@ class GlobalInfoSelector(ItemSelector):
         #####
         # current
         ######
-        energy = self.scoring.log_like[scale] + self.scoring.log_prior[scale]
+        energy = self.scoring.log_energy[scale]
 
         ###
 

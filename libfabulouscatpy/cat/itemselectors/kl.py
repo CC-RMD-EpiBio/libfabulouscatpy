@@ -103,7 +103,7 @@ class KLItemSelector(ItemSelector):
         # N_grid x N_item x K
 
         pi_density_t = self.scoring.scores[scale].density  # initial guess
-        lpi_density_t = self.scoring.log_like[scale] + self.scoring.log_prior[scale]
+        lpi_density_t = self.scoring.log_energy[scale]
         q_z = _trapz(
             np.exp(lp_itemized) * pi_density_t[:, np.newaxis, np.newaxis],
             self.model.interpolation_pts,
