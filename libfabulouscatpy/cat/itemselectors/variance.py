@@ -47,8 +47,34 @@ class VarianceItemSelector(ItemSelector):
         # Future
 
         lp_infty = log_ell + energy[:, np.newaxis, np.newaxis]
-        p_now = np.exp(log_ell)
-        p_now = np.sum(pi_now[:, np.newaxis, np.newaxis]*p_now, axis=0)
+
+        # p_now[j, k] = π*(x_j=k | x_t): predictive probability for response k
+        imputation_model = getattr(self.scoring, 'imputation_model', None)
+        if imputation_model is not None:
+            observed_dict = {
+                k: float(v) for k, v in self.scoring.scored_responses.items()
+                if v != self.scoring.skipped_response
+            }
+            n_categories = log_ell.shape[-1]
+            p_now = np.zeros((len(unresponded), n_categories))
+            for j_idx, item_dict in enumerate(unresponded):
+                try:
+                    p_now[j_idx] = imputation_model.predict_pmf(
+                        items=observed_dict,
+                        target=item_dict["item"],
+                        n_categories=n_categories,
+                    )
+                except (KeyError, ValueError):
+                    p_now[j_idx] = _trapz(
+                        np.exp(log_ell[:, j_idx, :]) * pi_now[:, np.newaxis],
+                        self.scoring.interpolation_pts[scale],
+                        axis=0,
+                    )
+                    p_now[j_idx] /= np.sum(p_now[j_idx])
+        else:
+            p_now = np.exp(log_ell)
+            p_now = np.sum(pi_now[:, np.newaxis, np.newaxis] * p_now, axis=0)
+
         pi_infty = np.exp(lp_infty - np.max(lp_infty, axis=0, keepdims=True))
         pi_infty /= _trapz(
             y=pi_infty, x=self.scoring.interpolation_pts[scale], axis=0
