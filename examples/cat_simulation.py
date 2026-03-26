@@ -30,9 +30,9 @@ from libfabulouscatpy.cat.itemselectors.fisher import FisherItemSelector
 from libfabulouscatpy.cat.itemselectors.bayesianfisher import BayesianFisherItemSelector
 from libfabulouscatpy.cat.itemselectors.globalinfo import GlobalInfoSelector
 from libfabulouscatpy.cat.itemselectors.variance import VarianceItemSelector
-from libfabulouscatpy.cat.itemselectors.crossentropy import (
-    CrossEntropyItemSelector,
-    StochasticCrossEntropyItemSelector,
+from libfabulouscatpy.cat.itemselectors.entropy import (
+    EntropyItemSelector,
+    StochasticEntropyItemSelector,
 )
 from libfabulouscatpy.imputation.irt_pairwise import pairwise_imputation_from_grm
 
@@ -65,12 +65,12 @@ SELECTOR_CONFIGS = {
         'class': VarianceItemSelector,
         'kwargs': {},
     },
-    'cross_entropy': {
-        'class': CrossEntropyItemSelector,
+    'entropy': {
+        'class': EntropyItemSelector,
         'kwargs': {'deterministic': True},
     },
-    'stochastic_ce': {
-        'class': StochasticCrossEntropyItemSelector,
+    'stochastic_entropy': {
+        'class': StochasticEntropyItemSelector,
         'kwargs': {},
     },
 }
