@@ -133,14 +133,26 @@ class CrossEntropyItemSelector(ItemSelector):
             )
             q_z /= np.sum(q_z, axis=-1, keepdims=True)
 
-        # H(π_t, π_{t+1,k}) = -∫ π(θ|x_t) log π(θ|x_t, x_i=k) dθ
+        # Compute the expected entropy of the next posterior (paper's
+        # derivation, Eq. 4-5).  For each candidate item i and response k,
+        # π(θ|x_t, x_i=k) ∝ π(θ|x_t) · P(x_i=k|θ).  We normalise on the
+        # grid and compute H(π_{t+1,k}) = -∫ π_{t+1,k} log π_{t+1,k} dθ.
+        # Then Δ_i = Σ_k π*(k) · H(π_{t+1,k}).  Lower = more informative.
         lpi_next = lpi_density_t[:, np.newaxis, np.newaxis] + lp_itemized
-        CE = pi_density_t[:, np.newaxis, np.newaxis] * (-lpi_next)
-        CE = _trapz(CE, self.model.interpolation_pts, axis=0)
+        # Stabilise and normalise each (item, k) slice: (N_grid, N_item, K)
+        lpi_next_stable = lpi_next - np.max(lpi_next, axis=0, keepdims=True)
+        pi_next = np.exp(lpi_next_stable)
+        Z_next = _trapz(pi_next, self.model.interpolation_pts, axis=0)
+        Z_next = np.maximum(Z_next, 1e-30)
+        pi_next /= Z_next[np.newaxis, :, :]
+        # Entropy: H(π_{t+1,k}) = -∫ π_{t+1,k} log π_{t+1,k} dθ
+        log_pi_next = np.log(pi_next + 1e-30)
+        H_next = _trapz(-pi_next * log_pi_next,
+                         self.model.interpolation_pts, axis=0)  # (N_item, K)
 
-        # Δ_i = Σ_k π*(k) · H(π_t, π_{t+1,k})
-        CE = np.sum(CE * q_z, axis=-1)
-        criterion = dict(zip([x["item"] for x in items], CE))
+        # Δ_i = Σ_k π*(k) · H(π_{t+1,k})  — minimise for greedy selection
+        criterion_vals = np.sum(H_next * q_z, axis=-1)
+        criterion = dict(zip([x["item"] for x in items], criterion_vals))
         return criterion
     
     def _next_scored_item(
@@ -170,13 +182,15 @@ class CrossEntropyItemSelector(ItemSelector):
                 Delta += [v]
         if len(items) == 0:
             return {}
-        Delta -= np.min(Delta)
-        probs = np.exp(-Delta / self.temperature)
-        probs /= np.sum(probs)
-
+        # Minimise expected next-posterior entropy: lower Δ = more
+        # informative item.  Stochastic mode (paper's Eq. 8) samples
+        # from exp(-Δ/T); deterministic mode picks the minimum directly.
         if self.deterministic or (self.hybrid and ((self.scoring.n_scored[scale] > 3))):
-            ndx = np.argmax(probs)
+            ndx = np.argmin(Delta)
         else:
+            Delta -= np.min(Delta)
+            probs = np.exp(-Delta / self.temperature)
+            probs /= np.sum(probs)
             ndx = np.random.choice(np.arange(len(criterion.keys())), p=probs)
         result = list(criterion.keys())[ndx]
         for i in un_items:
