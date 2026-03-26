@@ -53,10 +53,9 @@
 from typing import Any
 
 import numpy as np
-from fabulouscat.models.session import CatSessionTracker
-
 from libfabulouscatpy._compat import trapz as _trapz
 from libfabulouscatpy.cat.itemselection import ItemSelector
+from libfabulouscatpy.cat.session import CatSessionTracker
 from libfabulouscatpy.irt.scoring import BayesianScoring
 
 
