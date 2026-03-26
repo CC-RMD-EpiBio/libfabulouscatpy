@@ -72,9 +72,13 @@ class CrossEntropyItemSelector(ItemSelector):
     def criterion(
         self, scoring: BayesianScoring, items: list[dict], scale=None
     ) -> dict[str:Any]:
-        """
-        Parameters: session: instance of CatSession
-        Returns:    item dictionary entry or None
+        """Compute the cross-entropy item selection criterion (Eq. 7).
+
+        For each candidate item i:
+            Δ_i = Σ_k π*(x_i=k|x_t) · H(π(θ|x_t), π(θ|x_t, x_i=k))
+
+        where π* is the imputation model's predictive probability (or
+        the model-implied marginal when no imputation model is set).
         """
 
         unresponded = [i for i in items if "scales" in i.keys()]
@@ -87,32 +91,55 @@ class CrossEntropyItemSelector(ItemSelector):
             self.model.item_labels[scale].index(j["item"]) for j in unresponded
         ]
 
-        #####
-        # current
-        ######
-
-        #######
-        # Future
+        # log P(x_i=k|θ) for unresponded items: shape (N_grid, N_item, K)
         lp_itemized = self.model.models[scale].log_likelihood(
             theta=self.model.interpolation_pts, observed_only=False
-        )[
-            :, unresponded_ndx, :
-        ]  # ll for unobserved items as a function of the theta grid
-        # N_grid x N_item x K
+        )[:, unresponded_ndx, :]
 
-        pi_density_t = self.scoring.scores[scale].density  # initial guess
+        pi_density_t = self.scoring.scores[scale].density
         lpi_density_t = self.scoring.log_like[scale] + self.scoring.log_prior[scale]
-        q_z = _trapz(
-            np.exp(lp_itemized) * pi_density_t[:, np.newaxis, np.newaxis],
-            self.model.interpolation_pts,
-            axis=0,
-        )
-        q_z /= np.sum(q_z, axis=-1, keepdims=True)
 
+        # q_z[j, k] = π*(x_j=k | x_t): predictive probability for response k
+        imputation_model = getattr(self.scoring, 'imputation_model', None)
+        if imputation_model is not None:
+            # Use the imputation ensemble π* for the marginal response probs
+            observed_dict = {
+                k: float(v) for k, v in self.scoring.scored_responses.items()
+                if v != self.scoring.skipped_response
+            }
+            n_categories = lp_itemized.shape[-1]
+            q_z = np.zeros((len(unresponded), n_categories))
+            for j_idx, item_dict in enumerate(unresponded):
+                try:
+                    q_z[j_idx] = imputation_model.predict_pmf(
+                        items=observed_dict,
+                        target=item_dict["item"],
+                        n_categories=n_categories,
+                    )
+                except (KeyError, ValueError):
+                    # Fallback to model-implied marginal
+                    q_z[j_idx] = _trapz(
+                        np.exp(lp_itemized[:, j_idx, :]) * pi_density_t[:, np.newaxis],
+                        self.model.interpolation_pts,
+                        axis=0,
+                    )
+                    q_z[j_idx] /= np.sum(q_z[j_idx])
+        else:
+            # Model-implied marginal: q(k) = ∫ P(k|θ) π(θ|x_t) dθ
+            q_z = _trapz(
+                np.exp(lp_itemized) * pi_density_t[:, np.newaxis, np.newaxis],
+                self.model.interpolation_pts,
+                axis=0,
+            )
+            q_z /= np.sum(q_z, axis=-1, keepdims=True)
+
+        # H(π_t, π_{t+1,k}) = -∫ π(θ|x_t) log π(θ|x_t, x_i=k) dθ
         lpi_next = lpi_density_t[:, np.newaxis, np.newaxis] + lp_itemized
-        CE = pi_density_t[:, np.newaxis, np.newaxis]*( - lpi_next)
+        CE = pi_density_t[:, np.newaxis, np.newaxis] * (-lpi_next)
         CE = _trapz(CE, self.model.interpolation_pts, axis=0)
-        CE = np.sum(CE*q_z, axis=-1)
+
+        # Δ_i = Σ_k π*(k) · H(π_t, π_{t+1,k})
+        CE = np.sum(CE * q_z, axis=-1)
         criterion = dict(zip([x["item"] for x in items], CE))
         return criterion
     
