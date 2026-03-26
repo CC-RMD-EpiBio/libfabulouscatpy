@@ -38,7 +38,7 @@ class VarianceItemSelector(ItemSelector):
         ]  # ll for unobserved items
 
         # previously observed
-        energy = self.scoring.log_like[scale] + self.scoring.log_prior[scale]
+        energy = self.scoring.log_energy[scale]
         pi_now = scoring.scores[scale].density
 
         ###

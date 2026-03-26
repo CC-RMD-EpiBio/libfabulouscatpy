@@ -102,7 +102,7 @@ class KLItemSelector(ItemSelector):
         # N_grid x N_item x K
 
         pi_density_t = self.scoring.scores[scale].density
-        lpi_density_t = self.scoring.log_like[scale] + self.scoring.log_prior[scale]
+        lpi_density_t = self.scoring.log_energy[scale]
 
         # q_z[j, k] = π*(x_j=k | x_t): predictive probability for response k
         imputation_model = getattr(self.scoring, 'imputation_model', None)

@@ -73,6 +73,7 @@ class BayesianScoring(ScoringBase):
         self.skipped_response = skipped_response if skipped_response is not None else const.SKIPPED_RESPONSE
         self.n_scored = defaultdict(int)
         self.imputation_model = imputation_model
+        self.log_energy = {}
 
         for scale in self.model.models.keys():
             self.log_like[scale] = model.interpolation_pts * 0
@@ -213,6 +214,7 @@ class BayesianScoring(ScoringBase):
                 log_prob = log_prob + self._compute_imputed_log_likelihood(
                     responses, scale
                 )
+            self.log_energy[scale] = log_prob
             densities[scale] = np.exp(log_prob - np.max(log_prob))
             densities[scale] /= _trapz(y=densities[scale], x=self.interpolation_pts[scale])
 
