@@ -27,9 +27,17 @@ import numpy as np
 
 
 DATASET_CONFIGS = {
+    'grit': {
+        'module': 'bayesianquilts.data.grit',
+        'model_dir': None,
+    },
+    'rwa': {
+        'module': 'bayesianquilts.data.rwa',
+        'model_dir': None,
+    },
     'eqsq': {
         'module': 'bayesianquilts.data.eqsq',
-        'model_dir': None,  # set via --model-dir
+        'model_dir': None,
     },
     'wpi': {
         'module': 'bayesianquilts.data.wpi',
@@ -47,8 +55,12 @@ DATASET_CONFIGS = {
 
 # Default model locations (relative to bayesianquilts notebooks)
 DEFAULT_MODEL_DIRS = {
+    'grit': os.path.expanduser(
+        '~/workspace/bayesianquilts/notebooks/irt/grit/grm_baseline'),
+    'rwa': os.path.expanduser(
+        '~/workspace/bayesianquilts/notebooks/irt/rwa/grm_baseline'),
     'eqsq': os.path.expanduser(
-        '~/workspace/bayesianquilts/notebooks/irt/synthetic/results/eqsq/grm_baseline'),
+        '~/workspace/bayesianquilts/notebooks/irt/eqsq/grm_baseline'),
     'wpi': os.path.expanduser(
         '~/workspace/bayesianquilts/notebooks/irt/wpi/grm_baseline'),
     'tma': os.path.expanduser(

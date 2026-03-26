@@ -145,11 +145,19 @@ def make_selector_kwargs(items, scales, model, scoring):
 
 def run_accuracy_experiment(model, items, scale_name, scales,
                             selector_name, selector_config,
-                            max_items, seed=42):
+                            max_items, seed=42,
+                            imputation_model=None):
     """Run the accuracy experiment for one selector.
 
     For each true ability and replicate, simulate responses and run CAT.
     Collect KL discrepancy, absolute error, and posterior SD at each step.
+
+    The ground truth is the full-data posterior (scoring all items), not
+    the generating ability value.
+
+    If ``imputation_model`` is provided, the CAT scorer uses the adjusted
+    posterior π_adj(θ|x) ∝ π(θ|x) · w(θ), where w(θ) marginalizes
+    unobserved items via the imputation ensemble.
     """
     n_abilities = len(TRUE_ABILITIES)
     kl = np.full((n_abilities, N_REPLICATES, max_items), np.nan)
@@ -165,18 +173,20 @@ def run_accuracy_experiment(model, items, scale_name, scales,
         for rep in range(N_REPLICATES):
             np.random.seed(seed + ai * N_REPLICATES + rep)
 
-            # Simulate true responses
+            # Simulate true responses (0-indexed)
             true_responses = model.sample(theta)
+            # Convert to 1-indexed for scoring (GRM expects 1..K)
             true_responses_scoring = {k: v + 1 for k, v in true_responses.items()}
 
-            # Score with all responses to get ground truth
+            # Score with all responses to get full-data posterior
             scoring_truth = BayesianScoring(
                 model=model, log_prior_fn=log_prior_fn)
             true_scores = scoring_truth.score_responses(true_responses_scoring)
 
             # Fresh scorer + selector for CAT
             scoring = BayesianScoring(
-                model=model, log_prior_fn=log_prior_fn)
+                model=model, log_prior_fn=log_prior_fn,
+                imputation_model=imputation_model)
             common_kwargs = make_selector_kwargs(items, scales, model, scoring)
             sel = selector_config['class'](
                 scoring=scoring,
@@ -221,7 +231,8 @@ def run_accuracy_experiment(model, items, scale_name, scales,
 
 def run_exposure_experiment(model, items, scale_name, scales,
                             selector_name, selector_config,
-                            items_per_session, seed=42):
+                            items_per_session, seed=42,
+                            imputation_model=None):
     """Run the exposure experiment for one selector.
 
     Count unique items exposed across increasing numbers of sessions.
@@ -242,7 +253,8 @@ def run_exposure_experiment(model, items, scale_name, scales,
             theta = {scale_name: np.atleast_1d(theta_val)}
 
             scoring = BayesianScoring(
-                model=model, log_prior_fn=log_prior_fn)
+                model=model, log_prior_fn=log_prior_fn,
+                imputation_model=imputation_model)
             common_kwargs = make_selector_kwargs(items, scales, model, scoring)
             sel = selector_config['class'](
                 scoring=scoring,
@@ -281,7 +293,7 @@ def run_exposure_experiment(model, items, scale_name, scales,
 def main():
     parser = argparse.ArgumentParser(description='Run CAT simulations')
     parser.add_argument('--dataset', required=True,
-                        choices=['eqsq', 'wpi', 'tma', 'npi'])
+                        choices=['grit', 'rwa', 'eqsq', 'wpi', 'tma', 'npi'])
     parser.add_argument('--params-dir', default='params',
                         help='Directory containing .npz param files')
     parser.add_argument('--output-dir', default='results',
@@ -293,6 +305,8 @@ def main():
                         help='Skip accuracy experiment')
     parser.add_argument('--skip-exposure', action='store_true',
                         help='Skip exposure experiment')
+    parser.add_argument('--imputation-model', default=None,
+                        help='Path to imputation model JSON for adjusted scoring')
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
 
@@ -303,6 +317,13 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
     scale_name = args.dataset.upper()
+
+    # Load imputation model if provided
+    imputation_model = None
+    if args.imputation_model is not None:
+        from libfabulouscatpy.imputation.pairwise import PairwiseImputationModel
+        imputation_model = PairwiseImputationModel.from_json(args.imputation_model)
+        print(f"Loaded imputation model from {args.imputation_model}")
 
     print(f"Loading model for {args.dataset}...")
     model, items, item_keys, response_cardinality = build_model_from_params(
@@ -316,6 +337,8 @@ def main():
     print(f"  Items: {n_items}, K: {response_cardinality}")
     print(f"  Max CAT length: {max_items}, Items/session (exposure): {items_per_session}")
     print(f"  Selectors: {args.selectors}")
+    if imputation_model is not None:
+        print(f"  Imputation: ENABLED (adjusted posterior scoring)")
 
     for sel_name in args.selectors:
         if sel_name not in SELECTOR_CONFIGS:
@@ -331,7 +354,8 @@ def main():
             print("  Running accuracy experiment...")
             acc = run_accuracy_experiment(
                 model, items, scale_name, scales,
-                sel_name, sel_config, max_items, seed=args.seed)
+                sel_name, sel_config, max_items, seed=args.seed,
+                imputation_model=imputation_model)
 
             out_path = os.path.join(
                 args.output_dir, f'{args.dataset}_accuracy_{sel_name}.npz')
@@ -345,7 +369,8 @@ def main():
             print("  Running exposure experiment...")
             exp = run_exposure_experiment(
                 model, items, scale_name, scales,
-                sel_name, sel_config, items_per_session, seed=args.seed)
+                sel_name, sel_config, items_per_session, seed=args.seed,
+                imputation_model=imputation_model)
 
             out_path = os.path.join(
                 args.output_dir, f'{args.dataset}_exposure_{sel_name}.npz')
