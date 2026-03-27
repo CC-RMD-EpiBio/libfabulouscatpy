@@ -1,4 +1,4 @@
-"""Tests for BayesianScoring with MICEBayesianLOO imputation model."""
+"""Tests for BayesianScoring with pairwise stacking imputation model."""
 
 import numpy as np
 import pytest
@@ -183,7 +183,7 @@ class TestBayesianScoringWithImputation:
 
     def test_zero_observed_responses_uses_zero_predictors(self, model_and_items):
         """With no observed responses, imputation still applies via the
-        zero-predictor (intercept-only) models from MICEBayesianLOO.
+        zero-predictor (intercept-only) models.
         A biased imputation should shift the score away from the prior mean."""
         model, item_keys, n_cat = model_and_items
 

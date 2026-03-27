@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train MICE LOO imputation models for each dataset and export as JSON.
+"""Train pairwise ordinal stacking imputation models and export as JSON.
 
 Requires bayesianquilts (run from the bayesianquilts venv or install it).
 
@@ -29,14 +29,13 @@ DATASET_CONFIGS = {
 EXAMPLE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def mice_to_pairwise_json(mice_loo, item_keys, n_categories):
-    """Convert a MICEBayesianLOO model to PairwiseImputationModel JSON format.
+def model_to_pairwise_json(stacking_model, item_keys, n_categories):
+    """Convert a PairwiseOrdinalStackingModel to PairwiseImputationModel JSON.
 
-    For each pair (target, predictor), we query the MICE model with
+    For each pair (target, predictor), we query the stacking model with
     items={predictor: k} for each possible response k to get the
-    conditional PMF P(target | predictor=k).  This produces the same
-    pairwise PMF table that ``PairwiseImputationModel.from_json()``
-    expects.
+    conditional PMF P(target | predictor=k).  This produces the pairwise
+    PMF table that ``PairwiseImputationModel.from_json()`` expects.
     """
     pairwise_pmfs = {}
     stacking_weights = {}
@@ -54,7 +53,7 @@ def mice_to_pairwise_json(mice_loo, item_keys, n_categories):
 
             for resp_val in range(n_categories):
                 try:
-                    pmf = mice_loo.predict_pmf(
+                    pmf = stacking_model.predict_pmf(
                         items={predictor: float(resp_val)},
                         target=target,
                         n_categories=n_categories,
@@ -75,9 +74,9 @@ def mice_to_pairwise_json(mice_loo, item_keys, n_categories):
 
 
 def train_dataset(dataset_name, output_dir):
-    """Train MICE LOO and export as JSON for one dataset."""
+    """Train PairwiseOrdinalStackingModel and export as JSON for one dataset."""
     import importlib
-    from bayesianquilts.imputation.mice_loo import MICEBayesianLOO
+    from bayesianquilts.imputation.pairwise_stacking import PairwiseOrdinalStackingModel
 
     config = DATASET_CONFIGS[dataset_name]
     mod = importlib.import_module(config['module'])
@@ -85,7 +84,7 @@ def train_dataset(dataset_name, output_dir):
     response_cardinality = mod.response_cardinality
 
     print(f"\n{'='*60}")
-    print(f"Training MICE LOO for: {dataset_name.upper()}")
+    print(f"Training PairwiseOrdinalStackingModel for: {dataset_name.upper()}")
     print(f"  Items: {len(item_keys)}, K: {response_cardinality}")
     print(f"{'='*60}")
 
@@ -97,20 +96,18 @@ def train_dataset(dataset_name, output_dir):
     print(f"  Missing per item: min={pandas_df.isna().sum().min()}, "
           f"max={pandas_df.isna().sum().max()}")
 
-    # Fit MICE LOO
-    mice_loo = MICEBayesianLOO(
-        random_state=42,
+    # Fit PairwiseOrdinalStackingModel
+    model = PairwiseOrdinalStackingModel(
         prior_scale=1.0,
         pathfinder_num_samples=100,
         pathfinder_maxiter=50,
         batch_size=512,
         verbose=True,
     )
-    mice_loo.fit_loo_models(
+    model.fit(
         pandas_df,
         n_top_features=config['n_top_features'],
         n_jobs=1,
-        fit_zero_predictors=True,
         seed=42,
     )
 
@@ -118,26 +115,26 @@ def train_dataset(dataset_name, output_dir):
     bq_dir = os.path.expanduser(
         f'~/workspace/bayesianquilts/notebooks/irt/{dataset_name}')
     if os.path.isdir(bq_dir):
-        yaml_path = os.path.join(bq_dir, 'mice_loo_model.yaml')
-        mice_loo.save(yaml_path)
+        yaml_path = os.path.join(bq_dir, 'pairwise_stacking_model.yaml')
+        model.save(yaml_path)
         print(f"  Saved YAML: {yaml_path}")
 
     # Export as JSON for libfabulouscatpy
     os.makedirs(output_dir, exist_ok=True)
-    json_data = mice_to_pairwise_json(mice_loo, item_keys, response_cardinality)
+    json_data = model_to_pairwise_json(model, item_keys, response_cardinality)
     json_path = os.path.join(output_dir, 'imputation_model.json')
     with open(json_path, 'w') as f:
         json.dump(json_data, f)
     print(f"  Saved JSON: {json_path}")
 
-    del mice_loo, pandas_df, df
+    del model, pandas_df, df
     gc.collect()
     return json_path
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Train MICE LOO imputation models')
+        description='Train pairwise ordinal stacking imputation models')
     parser.add_argument('--datasets', nargs='+',
                         default=list(DATASET_CONFIGS.keys()),
                         choices=list(DATASET_CONFIGS.keys()))

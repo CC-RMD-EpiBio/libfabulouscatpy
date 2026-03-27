@@ -2,7 +2,8 @@
 
 Implements the stacked univariate imputation ensemble π* described in
 the paper.  For each unobserved item i, the imputation distribution is
-a weighted mixture of pairwise ordinal regressions:
+a weighted mixture of pairwise ordinal regressions and
+Dirichlet-multinomial contingency table models:
 
     π*(z_i = k | x) = Σ_{l ∈ O} w_{i|l} · P(z_i = k | x_l)
 
@@ -21,7 +22,7 @@ import numpy as np
 
 
 class PairwiseImputationModel:
-    """Stacked univariate (MICE) imputation model.
+    """Stacked pairwise imputation model.
 
     Each target item has a set of pairwise predictors, one per observed
     predictor item.  At prediction time, the model averages the pairwise
@@ -122,7 +123,7 @@ class MixedImputationModel:
 
     For each unobserved item i:
 
-        π*(z_i = k | x) = w_i · π_mice(z_i = k | x)
+        π*(z_i = k | x) = w_i · π_pairwise(z_i = k | x)
                          + (1 - w_i) · π_irt(z_i = k | θ_hat)
 
     where w_i is a per-item stacking weight determined by
@@ -130,33 +131,33 @@ class MixedImputationModel:
 
     Parameters
     ----------
-    mice_model : PairwiseImputationModel
-        The pairwise (MICE) imputation model.
+    pairwise_model : PairwiseImputationModel
+        The pairwise imputation model.
     irt_model : object
         An IRT model with a ``log_likelihood(theta, observed_only=False)``
         method returning shape (n_theta, n_items, K).
     mixing_weights : dict
-        Mapping ``item_id -> float`` giving the weight on the MICE model.
+        Mapping ``item_id -> float`` giving the weight on the pairwise model.
         Items not in the dict default to 0.5.
     theta_estimate : float
         Current point estimate of ability for the IRT prediction.
         Updated externally as CAT progresses.
     """
 
-    def __init__(self, mice_model, irt_model, mixing_weights,
+    def __init__(self, pairwise_model, irt_model, mixing_weights,
                  theta_estimate=0.0, scale_name=None):
-        self.mice_model = mice_model
+        self.pairwise_model = pairwise_model
         self.irt_model = irt_model
         self.mixing_weights = mixing_weights
         self.theta_estimate = theta_estimate
         self.scale_name = scale_name
 
     def predict_pmf(self, items, target, n_categories, **kwargs):
-        """Predict response PMF blending MICE and IRT predictions."""
-        w_mice = self.mixing_weights.get(target, 0.5)
+        """Predict response PMF blending pairwise and IRT predictions."""
+        w_pairwise = self.mixing_weights.get(target, 0.5)
 
-        # MICE prediction
-        pmf_mice = self.mice_model.predict_pmf(items, target, n_categories)
+        # Pairwise prediction
+        pmf_pairwise = self.pairwise_model.predict_pmf(items, target, n_categories)
 
         # IRT prediction at current theta estimate
         grm = self.irt_model.models[self.scale_name]
@@ -169,7 +170,7 @@ class MixedImputationModel:
         pmf_irt /= pmf_irt.sum()
 
         # Blend
-        pmf = w_mice * pmf_mice + (1 - w_mice) * pmf_irt
+        pmf = w_pairwise * pmf_pairwise + (1 - w_pairwise) * pmf_irt
         pmf = np.maximum(pmf, 1e-20)
         pmf /= pmf.sum()
         return pmf
