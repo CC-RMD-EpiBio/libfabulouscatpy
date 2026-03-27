@@ -53,10 +53,9 @@
 from typing import Any
 
 import numpy as np
-from fabulouscat.models.session import CatSessionTracker
-
 from libfabulouscatpy._compat import trapz as _trapz
 from libfabulouscatpy.cat.itemselection import ItemSelector
+from libfabulouscatpy.cat.session import CatSessionTracker
 from libfabulouscatpy.irt.scoring import BayesianScoring
 
 
@@ -102,19 +101,44 @@ class KLItemSelector(ItemSelector):
         ]  # ll for unobserved items as a function of the theta grid
         # N_grid x N_item x K
 
-        pi_density_t = self.scoring.scores[scale].density  # initial guess
+        pi_density_t = self.scoring.scores[scale].density
         lpi_density_t = self.scoring.log_energy[scale]
-        q_z = _trapz(
-            np.exp(lp_itemized) * pi_density_t[:, np.newaxis, np.newaxis],
-            self.model.interpolation_pts,
-            axis=0,
-        )
-        q_z /= np.sum(q_z, axis=-1, keepdims=True)
+
+        # q_z[j, k] = π*(x_j=k | x_t): predictive probability for response k
+        imputation_model = getattr(self.scoring, 'imputation_model', None)
+        if imputation_model is not None:
+            observed_dict = {
+                k: float(v) for k, v in self.scoring.scored_responses.items()
+                if v != self.scoring.skipped_response
+            }
+            n_categories = lp_itemized.shape[-1]
+            q_z = np.zeros((len(unresponded), n_categories))
+            for j_idx, item_dict in enumerate(unresponded):
+                try:
+                    q_z[j_idx] = imputation_model.predict_pmf(
+                        items=observed_dict,
+                        target=item_dict["item"],
+                        n_categories=n_categories,
+                    )
+                except (KeyError, ValueError):
+                    q_z[j_idx] = _trapz(
+                        np.exp(lp_itemized[:, j_idx, :]) * pi_density_t[:, np.newaxis],
+                        self.model.interpolation_pts,
+                        axis=0,
+                    )
+                    q_z[j_idx] /= np.sum(q_z[j_idx])
+        else:
+            q_z = _trapz(
+                np.exp(lp_itemized) * pi_density_t[:, np.newaxis, np.newaxis],
+                self.model.interpolation_pts,
+                axis=0,
+            )
+            q_z /= np.sum(q_z, axis=-1, keepdims=True)
 
         lpi_next = lpi_density_t[:, np.newaxis, np.newaxis] + lp_itemized
-        KL = pi_density_t[:, np.newaxis, np.newaxis]*(lpi_density_t[:, np.newaxis, np.newaxis] - lpi_next)
+        KL = pi_density_t[:, np.newaxis, np.newaxis] * (lpi_density_t[:, np.newaxis, np.newaxis] - lpi_next)
         KL = _trapz(KL, self.model.interpolation_pts, axis=0)
-        KL = np.sum(KL*q_z, axis=-1)
+        KL = np.sum(KL * q_z, axis=-1)
         criterion = dict(zip([x["item"] for x in items], KL))
         return criterion
 
