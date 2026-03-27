@@ -30,10 +30,11 @@ from libfabulouscatpy.cat.itemselectors.fisher import FisherItemSelector
 from libfabulouscatpy.cat.itemselectors.bayesianfisher import BayesianFisherItemSelector
 from libfabulouscatpy.cat.itemselectors.globalinfo import GlobalInfoSelector
 from libfabulouscatpy.cat.itemselectors.variance import VarianceItemSelector
-from libfabulouscatpy.cat.itemselectors.crossentropy import (
-    CrossEntropyItemSelector,
-    StochasticCrossEntropyItemSelector,
+from libfabulouscatpy.cat.itemselectors.entropy import (
+    EntropyItemSelector,
+    StochasticEntropyItemSelector,
 )
+from libfabulouscatpy.imputation.irt_pairwise import pairwise_imputation_from_grm
 
 
 # Grid for Bayesian scoring
@@ -64,12 +65,12 @@ SELECTOR_CONFIGS = {
         'class': VarianceItemSelector,
         'kwargs': {},
     },
-    'cross_entropy': {
-        'class': CrossEntropyItemSelector,
+    'entropy': {
+        'class': EntropyItemSelector,
         'kwargs': {'deterministic': True},
     },
-    'stochastic_ce': {
-        'class': StochasticCrossEntropyItemSelector,
+    'stochastic_entropy': {
+        'class': StochasticEntropyItemSelector,
         'kwargs': {},
     },
 }
@@ -128,6 +129,63 @@ class _FakeScaleDatabase:
         self.scale_keys = list(scales.keys())
 
 
+def sample_from_ensemble(model, scale_name, theta, imputation_model,
+                         n_categories, mixing_weight=0.5):
+    """Sample responses from the imputation-adjusted ensemble.
+
+    Instead of sampling purely from the IRT model P(x_i|θ), we generate
+    responses sequentially.  For each item, the sampling distribution is:
+
+        p_gen(x_i=k) = (1-w) · P_irt(x_i=k|θ)  +  w · π*(x_i=k|x_observed)
+
+    where x_observed are the items already sampled.  This creates pairwise
+    dependencies beyond what the IRT model captures, simulating the M-open
+    regime where the scoring model is misspecified.
+
+    Returns:
+        dict mapping item_id -> 0-indexed response
+    """
+    grm = model.models[scale_name]
+    item_labels = list(grm.item_labels)
+
+    # IRT probabilities for all items at this theta: (n_items, K)
+    log_p = grm.log_likelihood(
+        theta=np.atleast_1d(theta), observed_only=False)  # (1, n_items, K)
+    p_irt = np.exp(log_p[0])
+    p_irt = p_irt / p_irt.sum(axis=-1, keepdims=True)
+
+    # Random item ordering so the sequential blending doesn't favour
+    # any particular direction
+    order = np.random.permutation(len(item_labels))
+    responses = {}
+
+    for idx in order:
+        item = item_labels[idx]
+        irt_pmf = p_irt[idx]
+
+        if responses and imputation_model is not None:
+            # Imputation model prediction given already-sampled items
+            observed_dict = {k: float(v) for k, v in responses.items()}
+            try:
+                imp_pmf = imputation_model.predict_pmf(
+                    items=observed_dict, target=item,
+                    n_categories=n_categories)
+                imp_pmf = np.asarray(imp_pmf, dtype=float)
+                imp_pmf = np.maximum(imp_pmf, 1e-20)
+                imp_pmf /= imp_pmf.sum()
+                blended = (1 - mixing_weight) * irt_pmf + mixing_weight * imp_pmf
+            except (KeyError, ValueError):
+                blended = irt_pmf
+        else:
+            blended = irt_pmf
+
+        blended = np.maximum(blended, 1e-20)
+        blended /= blended.sum()
+        responses[item] = int(np.random.choice(len(blended), p=blended))
+
+    return responses
+
+
 def make_selector_kwargs(items, scales, model, scoring):
     """Build the common kwargs needed by all ItemSelector constructors."""
     return {
@@ -146,18 +204,13 @@ def make_selector_kwargs(items, scales, model, scoring):
 def run_accuracy_experiment(model, items, scale_name, scales,
                             selector_name, selector_config,
                             max_items, seed=42,
-                            imputation_model=None):
+                            imputation_model=None,
+                            response_cardinality=None):
     """Run the accuracy experiment for one selector.
 
-    For each true ability and replicate, simulate responses and run CAT.
-    Collect KL discrepancy, absolute error, and posterior SD at each step.
-
-    The ground truth is the full-data posterior (scoring all items), not
-    the generating ability value.
-
-    If ``imputation_model`` is provided, the CAT scorer uses the adjusted
-    posterior π_adj(θ|x) ∝ π(θ|x) · w(θ), where w(θ) marginalizes
-    unobserved items via the imputation ensemble.
+    Responses are generated from the imputation-adjusted ensemble
+    (M-open regime), not the bare IRT model.  The ground truth is
+    the full-data posterior (scoring all items).
     """
     n_abilities = len(TRUE_ABILITIES)
     kl = np.full((n_abilities, N_REPLICATES, max_items), np.nan)
@@ -173,14 +226,17 @@ def run_accuracy_experiment(model, items, scale_name, scales,
         for rep in range(N_REPLICATES):
             np.random.seed(seed + ai * N_REPLICATES + rep)
 
-            # Simulate true responses (0-indexed)
-            true_responses = model.sample(theta)
+            # Generate responses from the imputation-adjusted ensemble
+            true_responses = sample_from_ensemble(
+                model, scale_name, theta_val, imputation_model,
+                n_categories=response_cardinality)
             # Convert to 1-indexed for scoring (GRM expects 1..K)
             true_responses_scoring = {k: v + 1 for k, v in true_responses.items()}
 
             # Score with all responses to get full-data posterior
             scoring_truth = BayesianScoring(
-                model=model, log_prior_fn=log_prior_fn)
+                model=model, log_prior_fn=log_prior_fn,
+                imputation_model=imputation_model)
             true_scores = scoring_truth.score_responses(true_responses_scoring)
 
             # Fresh scorer + selector for CAT
@@ -232,7 +288,8 @@ def run_accuracy_experiment(model, items, scale_name, scales,
 def run_exposure_experiment(model, items, scale_name, scales,
                             selector_name, selector_config,
                             items_per_session, seed=42,
-                            imputation_model=None):
+                            imputation_model=None,
+                            response_cardinality=None):
     """Run the exposure experiment for one selector.
 
     Count unique items exposed across increasing numbers of sessions.
@@ -264,7 +321,9 @@ def run_exposure_experiment(model, items, scale_name, scales,
             tracker = CatSessionTracker(
                 session=CatSession(), scales=[scale_name])
 
-            true_responses = model.sample(theta)
+            true_responses = sample_from_ensemble(
+                model, scale_name, theta_val, imputation_model,
+                n_categories=response_cardinality)
             true_responses_scoring = {k: v + 1 for k, v in true_responses.items()}
 
             for step in range(items_per_session):
@@ -290,14 +349,57 @@ def run_exposure_experiment(model, items, scale_name, scales,
     return {'unique_items': unique_items}
 
 
+def print_accuracy_summary(results_dir, dataset, selectors, test_lengths):
+    """Print accuracy results broken down by ability range."""
+    # Ability ranges: low (<= -1.5), mid (-1 to 1), high (>= 1.5)
+    ranges = {
+        'low (theta <= -1.5)': TRUE_ABILITIES <= -1.5,
+        'mid (-1 <= theta <= 1)': (TRUE_ABILITIES >= -1.0) & (TRUE_ABILITIES <= 1.0),
+        'high (theta >= 1.5)': TRUE_ABILITIES >= 1.5,
+        'all': np.ones(len(TRUE_ABILITIES), dtype=bool),
+    }
+
+    for metric_key, metric_label in [('l2', 'Mean |score_true - score_CAT|'),
+                                      ('kl', 'Mean KL(true || CAT)')]:
+        print(f"\n  Metric: {metric_label}")
+
+        for tl in test_lengths:
+            step_idx = tl - 1
+            print(f"\n{'='*72}")
+            print(f"  Test length = {tl}")
+            print(f"{'='*72}")
+            header = f"  {'Range':<25s}"
+            for sel in selectors:
+                header += f" {sel:>14s}"
+            print(header)
+            print("  " + "-" * (25 + 15 * len(selectors)))
+
+            for range_name, mask in ranges.items():
+                row = f"  {range_name:<25s}"
+                for sel in selectors:
+                    path = os.path.join(
+                        results_dir, f'{dataset}_accuracy_{sel}.npz')
+                    if not os.path.exists(path):
+                        row += f" {'N/A':>14s}"
+                        continue
+                    data = np.load(path)
+                    arr = data[metric_key]
+                    subset = arr[mask, :, step_idx]
+                    val = np.nanmean(subset)
+                    row += f" {val:>14.4f}"
+                print(row)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Run CAT simulations')
     parser.add_argument('--dataset', required=True,
                         choices=['grit', 'rwa', 'eqsq', 'wpi', 'tma', 'npi'])
-    parser.add_argument('--params-dir', default='params',
-                        help='Directory containing .npz param files')
-    parser.add_argument('--output-dir', default='results',
-                        help='Output directory for results')
+    parser.add_argument('--params-dir', default=None,
+                        help='Directory containing .npz param files '
+                             '(default: examples/<dataset>/)')
+    parser.add_argument('--output-dir', default=None,
+                        help='Output directory for results '
+                             '(default: examples/<dataset>/results/)')
     parser.add_argument('--selectors', nargs='+',
                         default=list(SELECTOR_CONFIGS.keys()),
                         help='Which selectors to run')
@@ -306,24 +408,23 @@ def main():
     parser.add_argument('--skip-exposure', action='store_true',
                         help='Skip exposure experiment')
     parser.add_argument('--imputation-model', default=None,
-                        help='Path to imputation model JSON for adjusted scoring')
+                        help='Path to imputation model JSON '
+                             '(default: examples/<dataset>/imputation_model.json)')
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
 
-    npz_path = os.path.join(args.params_dir, f'{args.dataset}_grm_params.npz')
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    dataset_dir = os.path.join(script_dir, args.dataset)
+    params_dir = args.params_dir or dataset_dir
+    output_dir = args.output_dir or os.path.join(dataset_dir, 'results')
+
+    npz_path = os.path.join(params_dir, f'{args.dataset}_grm_params.npz')
     if not os.path.exists(npz_path):
         print(f"ERROR: {npz_path} not found. Run extract_grm_params.py first.")
         sys.exit(1)
 
-    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
     scale_name = args.dataset.upper()
-
-    # Load imputation model if provided
-    imputation_model = None
-    if args.imputation_model is not None:
-        from libfabulouscatpy.imputation.pairwise import PairwiseImputationModel
-        imputation_model = PairwiseImputationModel.from_json(args.imputation_model)
-        print(f"Loaded imputation model from {args.imputation_model}")
 
     print(f"Loading model for {args.dataset}...")
     model, items, item_keys, response_cardinality = build_model_from_params(
@@ -331,14 +432,26 @@ def main():
     n_items = len(item_keys)
     scales = {scale_name: {'description': scale_name}}
 
+    # Load imputation model: explicit path > dataset dir > IRT-derived fallback
+    imp_path = args.imputation_model
+    if imp_path is None:
+        imp_path = os.path.join(dataset_dir, 'imputation_model.json')
+    if os.path.exists(imp_path):
+        from libfabulouscatpy.imputation.pairwise import PairwiseImputationModel
+        imputation_model = PairwiseImputationModel.from_json(imp_path)
+        print(f"Loaded imputation model from {imp_path}")
+    else:
+        imputation_model = pairwise_imputation_from_grm(model, scale_name)
+        print(f"No pretrained imputation model found; "
+              f"derived from IRT ({n_items} items)")
+
     max_items = min(n_items, max(TEST_LENGTHS))
     items_per_session = min(12, n_items // 4)
 
     print(f"  Items: {n_items}, K: {response_cardinality}")
     print(f"  Max CAT length: {max_items}, Items/session (exposure): {items_per_session}")
     print(f"  Selectors: {args.selectors}")
-    if imputation_model is not None:
-        print(f"  Imputation: ENABLED (adjusted posterior scoring)")
+    print(f"  Imputation: ENABLED (adjusted posterior scoring)")
 
     for sel_name in args.selectors:
         if sel_name not in SELECTOR_CONFIGS:
@@ -355,10 +468,11 @@ def main():
             acc = run_accuracy_experiment(
                 model, items, scale_name, scales,
                 sel_name, sel_config, max_items, seed=args.seed,
-                imputation_model=imputation_model)
+                imputation_model=imputation_model,
+                response_cardinality=response_cardinality)
 
             out_path = os.path.join(
-                args.output_dir, f'{args.dataset}_accuracy_{sel_name}.npz')
+                output_dir, f'{args.dataset}_accuracy_{sel_name}.npz')
             np.savez_compressed(out_path,
                                 true_abilities=TRUE_ABILITIES,
                                 test_lengths=np.array(TEST_LENGTHS),
@@ -370,10 +484,11 @@ def main():
             exp = run_exposure_experiment(
                 model, items, scale_name, scales,
                 sel_name, sel_config, items_per_session, seed=args.seed,
-                imputation_model=imputation_model)
+                imputation_model=imputation_model,
+                response_cardinality=response_cardinality)
 
             out_path = os.path.join(
-                args.output_dir, f'{args.dataset}_exposure_{sel_name}.npz')
+                output_dir, f'{args.dataset}_exposure_{sel_name}.npz')
             np.savez_compressed(out_path,
                                 exposure_sessions=np.array(EXPOSURE_SESSIONS),
                                 n_items=n_items,
@@ -382,7 +497,17 @@ def main():
 
         gc.collect()
 
-    print(f"\nDone. Results in {args.output_dir}/")
+    # Print summary table broken down by ability range
+    if not args.skip_accuracy:
+        print(f"\n\n{'#'*72}")
+        print(f"  ACCURACY SUMMARY: {args.dataset.upper()}")
+        print(f"  Mean |score_true - score_CAT| by ability range")
+        print(f"{'#'*72}")
+        print_accuracy_summary(
+            output_dir, args.dataset, args.selectors,
+            [tl for tl in TEST_LENGTHS if tl <= max_items])
+
+    print(f"\nDone. Results in {output_dir}/")
 
 
 if __name__ == '__main__':

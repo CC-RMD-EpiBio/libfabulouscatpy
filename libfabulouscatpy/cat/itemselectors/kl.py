@@ -135,11 +135,19 @@ class KLItemSelector(ItemSelector):
             )
             q_z /= np.sum(q_z, axis=-1, keepdims=True)
 
+        # Compute expected entropy of the next posterior (same derivation
+        # as CE selector).  Normalise each hypothetical π(θ|x_t, x_i=k).
         lpi_next = lpi_density_t[:, np.newaxis, np.newaxis] + lp_itemized
-        KL = pi_density_t[:, np.newaxis, np.newaxis] * (lpi_density_t[:, np.newaxis, np.newaxis] - lpi_next)
-        KL = _trapz(KL, self.model.interpolation_pts, axis=0)
-        KL = np.sum(KL * q_z, axis=-1)
-        criterion = dict(zip([x["item"] for x in items], KL))
+        lpi_next_stable = lpi_next - np.max(lpi_next, axis=0, keepdims=True)
+        pi_next = np.exp(lpi_next_stable)
+        Z_next = _trapz(pi_next, self.model.interpolation_pts, axis=0)
+        Z_next = np.maximum(Z_next, 1e-30)
+        pi_next /= Z_next[np.newaxis, :, :]
+        log_pi_next = np.log(pi_next + 1e-30)
+        H_next = _trapz(-pi_next * log_pi_next,
+                         self.model.interpolation_pts, axis=0)
+        criterion_vals = np.sum(H_next * q_z, axis=-1)
+        criterion = dict(zip([x["item"] for x in items], criterion_vals))
         return criterion
 
     def _next_scored_item(
@@ -169,13 +177,13 @@ class KLItemSelector(ItemSelector):
                 Delta += [v]
         if len(items) == 0:
             return {}
-        Delta -= np.min(Delta)
-        probs = np.exp(-Delta / self.temperature)
-        probs /= np.sum(probs)
-
+        # Minimise expected next-posterior entropy (lower = more informative).
         if self.deterministic or (self.hybrid and ((self.scoring.n_scored[scale] > 3))):
-            ndx = np.argmax(probs)
+            ndx = np.argmin(Delta)
         else:
+            Delta -= np.min(Delta)
+            probs = np.exp(-Delta / self.temperature)
+            probs /= np.sum(probs)
             ndx = np.random.choice(np.arange(len(criterion.keys())), p=probs)
         result = list(criterion.keys())[ndx]
         for i in un_items:

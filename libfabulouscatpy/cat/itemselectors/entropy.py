@@ -1,0 +1,219 @@
+###############################################################################
+#
+#                           COPYRIGHT NOTICE
+#                  Mark O. Hatfield Clinical Research Center
+#                       National Institutes of Health
+#            United States Department of Health and Human Services
+#
+# This software was developed and is owned by the National Institutes of
+# Health Clinical Center (NIHCC), an agency of the United States Department
+# of Health and Human Services, which is making the software available to the
+# public for any commercial or non-commercial purpose under the following
+# open-source BSD license.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# (1) Redistributions of source code must retain this copyright
+# notice, this list of conditions and the following disclaimer.
+#
+# (2) Redistributions in binary form must reproduce this copyright
+# notice, this list of conditions and the following disclaimer in the
+# documentation and/or other materials provided with the distribution.
+#
+# (3) Neither the names of the National Institutes of Health Clinical
+# Center, the National Institutes of Health, the U.S. Department of
+# Health and Human Services, nor the names of any of the software
+# developers may be used to endorse or promote products derived from
+# this software without specific prior written permission.
+#
+# (4) Please acknowledge NIHCC as the source of this software by including
+# the phrase "Courtesy of the U.S. National Institutes of Health Clinical
+# Center"or "Source: U.S. National Institutes of Health Clinical Center."
+#
+# THIS SOFTWARE IS PROVIDED BY THE U.S. GOVERNMENT AND CONTRIBUTORS "AS
+# IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+# TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+# PARTICULAR PURPOSE ARE DISCLAIMED.
+#
+# You are under no obligation whatsoever to provide any bug fixes,
+# patches, or upgrades to the features, functionality or performance of
+# the source code ("Enhancements") to anyone; however, if you choose to
+# make your Enhancements available either publicly, or directly to
+# the National Institutes of Health Clinical Center, without imposing a
+# separate written license agreement for such Enhancements, then you hereby
+# grant the following license: a non-exclusive, royalty-free perpetual license
+# to install, use, modify, prepare derivative works, incorporate into
+# other computer software, distribute, and sublicense such Enhancements or
+# derivative works thereof, in binary and source code form.
+#
+###############################################################################
+# H(pi(\theta|x_t) || pi(\theta|x_t+1))
+
+from typing import Any
+
+import numpy as np
+from libfabulouscatpy._compat import trapz as _trapz
+from libfabulouscatpy.cat.itemselection import ItemSelector
+from libfabulouscatpy.cat.session import CatSessionTracker
+from libfabulouscatpy.irt.scoring import BayesianScoring
+
+
+class EntropyItemSelector(ItemSelector):
+
+    description = """Greedy entropy selector"""
+
+    def __init__(self, scoring, deterministic=True, hybrid=False,  **kwargs):
+        super(EntropyItemSelector, self).__init__(**kwargs)
+        self.scoring = scoring
+        self.hybrid = hybrid
+        self.deterministic = deterministic
+
+    def criterion(
+        self, scoring: BayesianScoring, items: list[dict], scale=None
+    ) -> dict[str:Any]:
+        """Compute the cross-entropy item selection criterion (Eq. 7).
+
+        For each candidate item i:
+            Δ_i = Σ_k π*(x_i=k|x_t) · H(π(θ|x_t), π(θ|x_t, x_i=k))
+
+        where π* is the imputation model's predictive probability (or
+        the model-implied marginal when no imputation model is set).
+        """
+
+        unresponded = [i for i in items if "scales" in i.keys()]
+        in_scale = [i for i in unresponded if scale in i["scales"].keys()]
+
+        if len(in_scale) == 0:
+            return {}
+
+        unresponded_ndx = [
+            self.model.item_labels[scale].index(j["item"]) for j in unresponded
+        ]
+
+        # log P(x_i=k|θ) for unresponded items: shape (N_grid, N_item, K)
+        lp_itemized = self.model.models[scale].log_likelihood(
+            theta=self.model.interpolation_pts, observed_only=False
+        )[:, unresponded_ndx, :]
+
+        pi_density_t = self.scoring.scores[scale].density
+        lpi_density_t = self.scoring.log_energy[scale]
+
+        # q_z[j, k] = π*(x_j=k | x_t): predictive probability for response k
+        imputation_model = getattr(self.scoring, 'imputation_model', None)
+        if imputation_model is not None:
+            # Use the imputation ensemble π* for the marginal response probs
+            observed_dict = {
+                k: float(v) for k, v in self.scoring.scored_responses.items()
+                if v != self.scoring.skipped_response
+            }
+            n_categories = lp_itemized.shape[-1]
+            q_z = np.zeros((len(unresponded), n_categories))
+            for j_idx, item_dict in enumerate(unresponded):
+                try:
+                    q_z[j_idx] = imputation_model.predict_pmf(
+                        items=observed_dict,
+                        target=item_dict["item"],
+                        n_categories=n_categories,
+                    )
+                except (KeyError, ValueError):
+                    # Fallback to model-implied marginal
+                    q_z[j_idx] = _trapz(
+                        np.exp(lp_itemized[:, j_idx, :]) * pi_density_t[:, np.newaxis],
+                        self.model.interpolation_pts,
+                        axis=0,
+                    )
+                    q_z[j_idx] /= np.sum(q_z[j_idx])
+        else:
+            # Model-implied marginal: q(k) = ∫ P(k|θ) π(θ|x_t) dθ
+            q_z = _trapz(
+                np.exp(lp_itemized) * pi_density_t[:, np.newaxis, np.newaxis],
+                self.model.interpolation_pts,
+                axis=0,
+            )
+            q_z /= np.sum(q_z, axis=-1, keepdims=True)
+
+        # Compute the expected entropy of the next posterior (paper's
+        # derivation, Eq. 4-5).  For each candidate item i and response k,
+        # π(θ|x_t, x_i=k) ∝ π(θ|x_t) · P(x_i=k|θ).  We normalise on the
+        # grid and compute H(π_{t+1,k}) = -∫ π_{t+1,k} log π_{t+1,k} dθ.
+        # Then Δ_i = Σ_k π*(k) · H(π_{t+1,k}).  Lower = more informative.
+        lpi_next = lpi_density_t[:, np.newaxis, np.newaxis] + lp_itemized
+        # Stabilise and normalise each (item, k) slice: (N_grid, N_item, K)
+        lpi_next_stable = lpi_next - np.max(lpi_next, axis=0, keepdims=True)
+        pi_next = np.exp(lpi_next_stable)
+        Z_next = _trapz(pi_next, self.model.interpolation_pts, axis=0)
+        Z_next = np.maximum(Z_next, 1e-30)
+        pi_next /= Z_next[np.newaxis, :, :]
+        # Entropy: H(π_{t+1,k}) = -∫ π_{t+1,k} log π_{t+1,k} dθ
+        log_pi_next = np.log(pi_next + 1e-30)
+        H_next = _trapz(-pi_next * log_pi_next,
+                         self.model.interpolation_pts, axis=0)  # (N_item, K)
+
+        # Δ_i = Σ_k π*(k) · H(π_{t+1,k})  — minimise for greedy selection
+        criterion_vals = np.sum(H_next * q_z, axis=-1)
+        criterion = dict(zip([x["item"] for x in items], criterion_vals))
+        return criterion
+    
+    def _next_scored_item(
+        self, tracker: CatSessionTracker, scale=None
+    ) -> dict[str : dict[str:Any]]:
+
+        scale = self.next_scale(tracker)
+        un_items = self.un_items(tracker, scale)
+
+        if un_items is None:
+            # Not sure if this can happen under normal testing, but included as
+            # a safety feature.
+            return None
+
+        trait = tracker.scores[scale]
+        trait = 0.0 if trait is None else trait
+        error = tracker.errors[scale]
+        error = 100.0 if error is None else error
+
+        criterion = self.criterion(scoring=self.scoring, items=un_items, scale=scale)
+        valid_items = [x["item"] for x in un_items]
+        items = []
+        Delta = []
+        for k, v in criterion.items():
+            if k in valid_items:
+                items += [k]
+                Delta += [v]
+        if len(items) == 0:
+            return {}
+        # Minimise expected next-posterior entropy: lower Δ = more
+        # informative item.  Stochastic mode (paper's Eq. 8) samples
+        # from exp(-Δ/T); deterministic mode picks the minimum directly.
+        if self.deterministic or (self.hybrid and ((self.scoring.n_scored[scale] > 3))):
+            ndx = np.argmin(Delta)
+        else:
+            Delta -= np.min(Delta)
+            probs = np.exp(-Delta / self.temperature)
+            probs /= np.sum(probs)
+            ndx = np.random.choice(np.arange(len(criterion.keys())), p=probs)
+        result = list(criterion.keys())[ndx]
+        for i in un_items:
+            if i["item"] == result:
+                return i
+        return {}
+
+
+class StochasticEntropyItemSelector(EntropyItemSelector):
+    description = "Stochastic entropy selector"
+
+    def __init__(self, scoring, **kwargs):
+        self.deterministic = False
+        super(StochasticEntropyItemSelector, self).__init__(
+            scoring=scoring, deterministic=False, **kwargs
+        )
+
+
+class HybridStochasticEntropyItemSelector(EntropyItemSelector):
+    description = "Hybrid Stochastic entropy selector"
+
+    def __init__(self, scoring, **kwargs):
+        self.deterministic = False
+        super(HybridStochasticEntropyItemSelector, self).__init__(
+            scoring=scoring, deterministic=False, hybrid=True, **kwargs
+        )
