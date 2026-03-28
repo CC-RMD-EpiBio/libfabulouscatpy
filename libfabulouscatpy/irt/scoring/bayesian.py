@@ -160,8 +160,9 @@ class BayesianScoring(ScoringBase):
         n_categories = log_p.shape[-1]
         marginal_ll = np.zeros_like(self.interpolation_pts[scale])
 
-        # Check for per-item ignorability flags from the imputation model
-        ignorable = getattr(self.imputation_model, 'ignorable_items', {})
+        # Check for per-item ignorability flags (set by the IRT model's
+        # compute_adaptive_thresholds, stored on the scorer)
+        ignorable = getattr(self, 'ignorable_items', {})
 
         for item in unobserved_items:
             # Skip items flagged as ignorable — their missing cells
