@@ -160,7 +160,15 @@ class BayesianScoring(ScoringBase):
         n_categories = log_p.shape[-1]
         marginal_ll = np.zeros_like(self.interpolation_pts[scale])
 
+        # Check for per-item ignorability flags from the imputation model
+        ignorable = getattr(self.imputation_model, 'ignorable_items', {})
+
         for item in unobserved_items:
+            # Skip items flagged as ignorable — their missing cells
+            # contribute log(1) = 0 (standard IRT marginalization)
+            if ignorable.get(item, False):
+                continue
+
             item_idx = grm.item_labels.index(item)
             try:
                 pmf = self.imputation_model.predict_pmf(
