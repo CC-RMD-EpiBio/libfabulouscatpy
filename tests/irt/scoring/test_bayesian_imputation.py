@@ -181,9 +181,9 @@ class TestBayesianScoringWithImputation:
             atol=1e-6,
         )
 
-    def test_zero_observed_responses_uses_zero_predictors(self, model_and_items):
+    def test_zero_observed_responses_uses_marginal_models(self, model_and_items):
         """With no observed responses, imputation still applies via the
-        zero-predictor (intercept-only) models.
+        marginal (intercept-only) models.
         A biased imputation should shift the score away from the prior mean."""
         model, item_keys, n_cat = model_and_items
 
@@ -265,9 +265,9 @@ class TestComputeImputedLogLikelihood:
         scores = scorer.score_responses({"item_0": 3})
         assert np.isfinite(scores["test_scale"].score)
 
-    def test_no_observed_still_imputes_via_zero_predictors(self):
+    def test_no_observed_still_imputes_via_marginal_models(self):
         """Even with no observed responses, the imputation model's
-        zero-predictor models provide population-marginal PMFs."""
+        marginal models provide population-marginal PMFs."""
         model = _make_grm()
         imp = MockImputationModel([f"item_{i}" for i in range(5)], 5, bias_category=2)
         scorer = BayesianScoring(model=model, imputation_model=imp)
