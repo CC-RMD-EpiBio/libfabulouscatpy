@@ -51,23 +51,20 @@ DATASET_CONFIGS = {
         'module': 'bayesianquilts.data.npi',
         'model_dir': None,
     },
+    'gcbs': {
+        'module': 'bayesianquilts.data.gcbs',
+        'model_dir': None,
+    },
+    'scs': {
+        'module': 'bayesianquilts.data.scs',
+        'model_dir': None,
+    },
 }
 
 # Default model locations (relative to bayesianquilts notebooks)
-DEFAULT_MODEL_DIRS = {
-    'grit': os.path.expanduser(
-        '~/workspace/bayesianquilts/notebooks/irt/grit/grm_baseline'),
-    'rwa': os.path.expanduser(
-        '~/workspace/bayesianquilts/notebooks/irt/rwa/grm_baseline'),
-    'eqsq': os.path.expanduser(
-        '~/workspace/bayesianquilts/notebooks/irt/eqsq/grm_baseline'),
-    'wpi': os.path.expanduser(
-        '~/workspace/bayesianquilts/notebooks/irt/wpi/grm_baseline'),
-    'tma': os.path.expanduser(
-        '~/workspace/bayesianquilts/notebooks/irt/tma/grm_baseline'),
-    'npi': os.path.expanduser(
-        '~/workspace/bayesianquilts/notebooks/irt/npi/grm_baseline'),
-}
+DEFAULT_MODEL_DIRS = {k: os.path.expanduser(
+    f'~/workspace/bayesianquilts/notebooks/irt/{k}/grm_baseline')
+    for k in DATASET_CONFIGS}
 
 
 def extract_params(model_dir, dataset_name, n_samples=1000, seed=42):
@@ -95,6 +92,14 @@ def extract_params(model_dir, dataset_name, n_samples=1000, seed=42):
     surrogate = model.surrogate_distribution_generator(model.params)
     key = jax.random.PRNGKey(seed)
     samples = surrogate.sample(n_samples, seed=key)
+    model.surrogate_sample = samples
+
+    # Standardize so theta ~ N(0,1) in the calibration population
+    print("  Standardizing abilities...")
+    stats = model.standardize_abilities()
+    samples = model.surrogate_sample  # now rescaled in-place
+    print(f"  mu={np.array(stats['mu']).squeeze():.4f}, "
+          f"sigma={np.array(stats['sigma']).squeeze():.4f}")
 
     # Take mean across samples — bijectors already applied by surrogate
     # discriminations: shape (n_samples, 1, dim, n_items, 1) -> mean -> squeeze

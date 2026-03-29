@@ -35,6 +35,7 @@ setup(
     packages=find_packages(),
     package_dir={"libfabulouscatpy": "libfabulouscatpy"},
     package_data={
+        'libfabulouscatpy': ['data/models/*.npz'],
     },
     include_package_data=True,
     description="libfabulouscatpy",

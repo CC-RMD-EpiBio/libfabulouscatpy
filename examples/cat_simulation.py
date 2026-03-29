@@ -195,9 +195,9 @@ def make_selector_kwargs(items, scales, model, scoring):
         'temperature': 0.01,
         'randomize_items': True,
         'randomize_scales': False,
-        'precision_limit': 0.33333,
-        'min_responses': 5,
-        'max_responses': 200,  # don't stop early via max_responses
+        'precision_limit': 0.0,   # no early stopping by precision
+        'min_responses': 0,
+        'max_responses': 9999,    # uncapped
     }
 
 
@@ -287,66 +287,72 @@ def run_accuracy_experiment(model, items, scale_name, scales,
 
 def run_exposure_experiment(model, items, scale_name, scales,
                             selector_name, selector_config,
-                            items_per_session, seed=42,
+                            test_lengths, seed=42,
                             imputation_model=None,
                             response_cardinality=None):
-    """Run the exposure experiment for one selector.
+    """Run the exposure experiment for one selector at multiple test lengths.
 
-    Count unique items exposed across increasing numbers of sessions.
+    For each test length t, runs EXPOSURE_SESSIONS sessions of t items each
+    and counts the total unique items exposed.
     """
     n_session_counts = len(EXPOSURE_SESSIONS)
     max_sessions = max(EXPOSURE_SESSIONS)
     n_exposure_replicates = 100
     log_prior_fn = {scale_name: gaussian_dens(1.0)}
 
-    unique_items = np.full((n_session_counts, n_exposure_replicates), np.nan)
+    # Results: one set per test length
+    results = {}
+    for tl in test_lengths:
+        unique_items = np.full((n_session_counts, n_exposure_replicates), np.nan)
 
-    for rep in range(n_exposure_replicates):
-        np.random.seed(seed + 10000 + rep)
-        seen_items = set()
+        for rep in range(n_exposure_replicates):
+            np.random.seed(seed + 10000 + tl * 1000 + rep)
+            seen_items = set()
 
-        for sess in range(max_sessions):
-            theta_val = np.random.randn()
-            theta = {scale_name: np.atleast_1d(theta_val)}
+            for sess in range(max_sessions):
+                theta_val = np.random.randn()
 
-            scoring = BayesianScoring(
-                model=model, log_prior_fn=log_prior_fn,
-                imputation_model=imputation_model)
-            common_kwargs = make_selector_kwargs(items, scales, model, scoring)
-            sel = selector_config['class'](
-                scoring=scoring,
-                **selector_config['kwargs'],
-                **common_kwargs,
-            )
-            tracker = CatSessionTracker(
-                session=CatSession(), scales=[scale_name])
+                scoring = BayesianScoring(
+                    model=model, log_prior_fn=log_prior_fn,
+                    imputation_model=imputation_model)
+                common_kwargs = make_selector_kwargs(items, scales, model, scoring)
+                sel = selector_config['class'](
+                    scoring=scoring,
+                    **selector_config['kwargs'],
+                    **common_kwargs,
+                )
+                tracker = CatSessionTracker(
+                    session=CatSession(), scales=[scale_name])
 
-            true_responses = sample_from_ensemble(
-                model, scale_name, theta_val, imputation_model,
-                n_categories=response_cardinality)
-            true_responses_scoring = {k: v + 1 for k, v in true_responses.items()}
+                true_responses = sample_from_ensemble(
+                    model, scale_name, theta_val, imputation_model,
+                    n_categories=response_cardinality)
+                true_responses_scoring = {k: v + 1 for k, v in true_responses.items()}
 
-            for step in range(items_per_session):
-                item_dict = sel.next_item(tracker, scale=scale_name)
-                if item_dict is None or item_dict == {}:
-                    break
-                item_id = item_dict['item']
-                response = true_responses_scoring[item_id]
-                tracker.responses[item_id] = response
+                for step in range(tl):
+                    item_dict = sel.next_item(tracker, scale=scale_name)
+                    if item_dict is None or item_dict == {}:
+                        break
+                    item_id = item_dict['item']
+                    response = true_responses_scoring[item_id]
+                    tracker.responses[item_id] = response
 
-                scores = scoring.score_responses(tracker.responses)
-                for s in scores:
-                    tracker.scores[s] = scores[s].score
-                    tracker.errors[s] = scores[s].error
+                    scores = scoring.score_responses(tracker.responses)
+                    for s in scores:
+                        tracker.scores[s] = scores[s].score
+                        tracker.errors[s] = scores[s].error
 
-                seen_items.add(item_id)
+                    seen_items.add(item_id)
 
-            # Record at each checkpoint
-            for si, n_sess in enumerate(EXPOSURE_SESSIONS):
-                if sess + 1 == n_sess:
-                    unique_items[si, rep] = len(seen_items)
+                for si, n_sess in enumerate(EXPOSURE_SESSIONS):
+                    if sess + 1 == n_sess:
+                        unique_items[si, rep] = len(seen_items)
 
-    return {'unique_items': unique_items}
+        results[tl] = unique_items
+        print(f"    t={tl}: mean unique at 32 sessions = "
+              f"{np.nanmean(unique_items[2]):.1f}")
+
+    return results
 
 
 def print_accuracy_summary(results_dir, dataset, selectors, test_lengths):
@@ -393,7 +399,7 @@ def print_accuracy_summary(results_dir, dataset, selectors, test_lengths):
 def main():
     parser = argparse.ArgumentParser(description='Run CAT simulations')
     parser.add_argument('--dataset', required=True,
-                        choices=['grit', 'rwa', 'eqsq', 'wpi', 'tma', 'npi'])
+                        choices=['grit', 'rwa', 'eqsq', 'wpi', 'tma', 'npi', 'gcbs', 'scs'])
     parser.add_argument('--params-dir', default=None,
                         help='Directory containing .npz param files '
                              '(default: examples/<dataset>/)')
@@ -420,8 +426,14 @@ def main():
 
     npz_path = os.path.join(params_dir, f'{args.dataset}_grm_params.npz')
     if not os.path.exists(npz_path):
-        print(f"ERROR: {npz_path} not found. Run extract_grm_params.py first.")
-        sys.exit(1)
+        # Fall back to bundled package data
+        try:
+            from libfabulouscatpy.data import get_grm_params_path
+            npz_path = str(get_grm_params_path(args.dataset))
+            print(f"Using bundled params: {npz_path}")
+        except (ImportError, FileNotFoundError):
+            print(f"ERROR: {npz_path} not found and no bundled params available.")
+            sys.exit(1)
 
     os.makedirs(output_dir, exist_ok=True)
     scale_name = args.dataset.upper()
@@ -445,11 +457,12 @@ def main():
         print(f"No pretrained imputation model found; "
               f"derived from IRT ({n_items} items)")
 
-    max_items = min(n_items, max(TEST_LENGTHS))
-    items_per_session = min(12, n_items // 4)
+    max_items = max(TEST_LENGTHS)
+    exposure_test_lengths = [tl for tl in TEST_LENGTHS if tl <= n_items]
 
     print(f"  Items: {n_items}, K: {response_cardinality}")
-    print(f"  Max CAT length: {max_items}, Items/session (exposure): {items_per_session}")
+    print(f"  Max CAT length: {max_items}")
+    print(f"  Exposure test lengths: {exposure_test_lengths}")
     print(f"  Selectors: {args.selectors}")
     print(f"  Imputation: ENABLED (adjusted posterior scoring)")
 
@@ -481,19 +494,30 @@ def main():
 
         if not args.skip_exposure:
             print("  Running exposure experiment...")
-            exp = run_exposure_experiment(
+            exp_results = run_exposure_experiment(
                 model, items, scale_name, scales,
-                sel_name, sel_config, items_per_session, seed=args.seed,
+                sel_name, sel_config, exposure_test_lengths, seed=args.seed,
                 imputation_model=imputation_model,
                 response_cardinality=response_cardinality)
 
+            for tl, unique_items in exp_results.items():
+                out_path = os.path.join(
+                    output_dir,
+                    f'{args.dataset}_exposure_{sel_name}_t{tl}.npz')
+                np.savez_compressed(out_path,
+                                    exposure_sessions=np.array(EXPOSURE_SESSIONS),
+                                    n_items=n_items,
+                                    test_length=tl,
+                                    unique_items=unique_items)
+            # Also save combined for backward compat (using largest test length)
+            largest_tl = max(exposure_test_lengths)
             out_path = os.path.join(
                 output_dir, f'{args.dataset}_exposure_{sel_name}.npz')
             np.savez_compressed(out_path,
                                 exposure_sessions=np.array(EXPOSURE_SESSIONS),
                                 n_items=n_items,
-                                **exp)
-            print(f"  Saved exposure: {out_path}")
+                                unique_items=exp_results[largest_tl])
+            print(f"  Saved exposure: {output_dir}/")
 
         gc.collect()
 
