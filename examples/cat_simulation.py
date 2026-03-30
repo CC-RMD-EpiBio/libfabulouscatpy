@@ -216,8 +216,16 @@ def run_accuracy_experiment(model, items, scale_name, scales,
     kl = np.full((n_abilities, N_REPLICATES, max_items), np.nan)
     l2 = np.full((n_abilities, N_REPLICATES, max_items), np.nan)
     se = np.full((n_abilities, N_REPLICATES, max_items), np.nan)
+    # Item trajectories: store index into item_keys at each step
+    item_traj = np.full((n_abilities, N_REPLICATES, max_items), -1,
+                        dtype=np.int16)
 
     log_prior_fn = {scale_name: gaussian_dens(2.0)}
+
+    # Build item_id -> index map from the model
+    grm = model.models[scale_name]
+    item_labels = list(grm.item_labels)
+    item_id_to_idx = {label: i for i, label in enumerate(item_labels)}
 
     for ai, theta_val in enumerate(TRUE_ABILITIES):
         theta = {scale_name: np.atleast_1d(theta_val)}
@@ -262,6 +270,7 @@ def run_accuracy_experiment(model, items, scale_name, scales,
                 item_id = item_dict['item']
                 response = true_responses_scoring[item_id]
                 tracker.responses[item_id] = response
+                item_traj[ai, rep, step] = item_id_to_idx.get(item_id, -1)
 
                 step_scores = scoring.score_responses(tracker.responses)
                 for s in step_scores:
@@ -284,13 +293,18 @@ def run_accuracy_experiment(model, items, scale_name, scales,
         dt = time.time() - t0
         print(f"    theta={theta_val:+.1f}: {dt:.1f}s")
 
-    return {'kl': kl, 'l2': l2, 'se': se}
+    return {
+        'kl': kl, 'l2': l2, 'se': se,
+        'item_trajectories': item_traj,
+        'item_labels': np.array(item_labels),
+    }
 
 
 EXPOSURE_RANGES = {
     'low': (-3.0, -1.5),
     'mid': (-1.0, 1.0),
     'high': (1.5, 3.0),
+    'all': (-3.0, 3.0),
 }
 N_EXPOSURE_SESSIONS = [16, 32, 64, 100]
 N_EXPOSURE_REPLICATES = 50
@@ -303,80 +317,90 @@ def run_exposure_experiment(model, items, scale_name, scales,
                             response_cardinality=None):
     """Run the exposure experiment for one selector at multiple test lengths.
 
-    For each test length t and ability range (low/mid/high), samples
-    respondent abilities uniformly within the range and accumulates the
-    set of unique items seen across increasing numbers of sessions.
+    Runs each session to max(test_lengths) and records cumulative unique
+    items at each test-length checkpoint, so a single session yields
+    exposure data for all test lengths simultaneously.
     """
     log_prior_fn = {scale_name: gaussian_dens(2.0)}
     range_names = list(EXPOSURE_RANGES.keys())
     n_ranges = len(range_names)
     n_session_counts = len(N_EXPOSURE_SESSIONS)
     max_sessions = max(N_EXPOSURE_SESSIONS)
+    n_tl = len(test_lengths)
+    max_tl = max(test_lengths)
+    tl_set = sorted(test_lengths)
 
-    results = {}
-    for tl in test_lengths:
-        # unique_items[ri, si, rep] = unique items after si sessions
-        # for ability range ri
-        unique_items = np.full(
-            (n_ranges, n_session_counts, N_EXPOSURE_REPLICATES), np.nan)
+    # unique_items[ri, tli, si, rep] = unique items after si sessions
+    # at test-length checkpoint tli, for ability range ri
+    unique_items = np.full(
+        (n_ranges, n_tl, n_session_counts, N_EXPOSURE_REPLICATES), np.nan)
 
-        for ri, rname in enumerate(range_names):
-            lo, hi = EXPOSURE_RANGES[rname]
-            for rep in range(N_EXPOSURE_REPLICATES):
-                np.random.seed(seed + 30000 + tl * 10000 + ri * 1000 + rep)
-                seen = set()
+    for ri, rname in enumerate(range_names):
+        lo, hi = EXPOSURE_RANGES[rname]
+        for rep in range(N_EXPOSURE_REPLICATES):
+            np.random.seed(seed + 30000 + ri * 1000 + rep)
+            # Track cumulative items seen at each test-length checkpoint
+            seen_at_tl = {tl: set() for tl in tl_set}
 
-                for sess in range(max_sessions):
-                    theta_val = np.random.uniform(lo, hi)
+            for sess in range(max_sessions):
+                theta_val = np.random.uniform(lo, hi)
 
-                    scoring = BayesianScoring(
-                        model=model, log_prior_fn=log_prior_fn,
-                        imputation_model=None)
-                    common_kwargs = make_selector_kwargs(
-                        items, scales, model, scoring)
-                    sel = selector_config['class'](
-                        scoring=scoring,
-                        **selector_config['kwargs'],
-                        **common_kwargs,
-                    )
-                    tracker = CatSessionTracker(
-                        session=CatSession(), scales=[scale_name])
+                scoring = BayesianScoring(
+                    model=model, log_prior_fn=log_prior_fn,
+                    imputation_model=None)
+                common_kwargs = make_selector_kwargs(
+                    items, scales, model, scoring)
+                sel = selector_config['class'](
+                    scoring=scoring,
+                    **selector_config['kwargs'],
+                    **common_kwargs,
+                )
+                tracker = CatSessionTracker(
+                    session=CatSession(), scales=[scale_name])
 
-                    true_responses = sample_from_ensemble(
-                        model, scale_name, theta_val, imputation_model,
-                        n_categories=response_cardinality)
-                    true_responses_scoring = {
-                        k: v + 1 for k, v in true_responses.items()}
+                true_responses = sample_from_ensemble(
+                    model, scale_name, theta_val, imputation_model,
+                    n_categories=response_cardinality)
+                true_responses_scoring = {
+                    k: v + 1 for k, v in true_responses.items()}
 
-                    for step in range(tl):
-                        item_dict = sel.next_item(tracker, scale=scale_name)
-                        if item_dict is None or item_dict == {}:
-                            break
-                        item_id = item_dict['item']
-                        response = true_responses_scoring[item_id]
-                        tracker.responses[item_id] = response
+                for step in range(max_tl):
+                    item_dict = sel.next_item(tracker, scale=scale_name)
+                    if item_dict is None or item_dict == {}:
+                        break
+                    item_id = item_dict['item']
+                    response = true_responses_scoring[item_id]
+                    tracker.responses[item_id] = response
 
-                        scores = scoring.score_responses(tracker.responses)
-                        for s in scores:
-                            tracker.scores[s] = scores[s].score
-                            tracker.errors[s] = scores[s].error
+                    scores = scoring.score_responses(tracker.responses)
+                    for s in scores:
+                        tracker.scores[s] = scores[s].score
+                        tracker.errors[s] = scores[s].error
 
-                        seen.add(item_id)
+                    # Record at each test-length checkpoint
+                    current_step = step + 1  # 1-indexed
+                    for tl in tl_set:
+                        if current_step <= tl:
+                            seen_at_tl[tl].add(item_id)
 
-                    for si, n_sess in enumerate(N_EXPOSURE_SESSIONS):
-                        if sess + 1 == n_sess:
-                            unique_items[ri, si, rep] = len(seen)
+                for si, n_sess in enumerate(N_EXPOSURE_SESSIONS):
+                    if sess + 1 == n_sess:
+                        for tli, tl in enumerate(tl_set):
+                            unique_items[ri, tli, si, rep] = len(
+                                seen_at_tl[tl])
 
-            print(f"    t={tl} {rname}: {unique_items[ri, 2, :].mean():.1f} "
-                  f"unique at 32 sessions")
+        # Print summary for the mid-range session count
+        for tli, tl in enumerate(tl_set):
+            print(f"    t={tl} {rname}: "
+                  f"{unique_items[ri, tli, 1, :].mean():.1f} "
+                  f"unique at {N_EXPOSURE_SESSIONS[1]} sessions")
 
-        results[tl] = {
-            'unique_items': unique_items,
-            'range_names': range_names,
-            'session_counts': N_EXPOSURE_SESSIONS,
-        }
-
-    return results
+    return {
+        'unique_items': unique_items,
+        'range_names': range_names,
+        'test_lengths': np.array(tl_set),
+        'session_counts': N_EXPOSURE_SESSIONS,
+    }
 
 
 def print_accuracy_summary(results_dir, dataset, selectors, test_lengths):
@@ -435,8 +459,6 @@ def main():
                         help='Which selectors to run')
     parser.add_argument('--skip-accuracy', action='store_true',
                         help='Skip accuracy experiment')
-    parser.add_argument('--skip-exposure', action='store_true',
-                        help='Skip exposure experiment')
     parser.add_argument('--imputation-model', default=None,
                         help='Path to imputation model JSON '
                              '(default: examples/<dataset>/imputation_model.json)')
@@ -481,12 +503,10 @@ def main():
         print(f"No pretrained imputation model found; "
               f"derived from IRT ({n_items} items)")
 
-    max_items = max(TEST_LENGTHS)
-    exposure_test_lengths = [tl for tl in TEST_LENGTHS if tl <= n_items]
+    max_items = min(max(TEST_LENGTHS), n_items)
 
     print(f"  Items: {n_items}, K: {response_cardinality}")
     print(f"  Max CAT length: {max_items}")
-    print(f"  Exposure test lengths: {exposure_test_lengths}")
     print(f"  Selectors: {args.selectors}")
     print(f"  Imputation: ENABLED (adjusted posterior scoring)")
 
@@ -516,25 +536,8 @@ def main():
                                 **acc)
             print(f"  Saved accuracy: {out_path}")
 
-        if not args.skip_exposure:
-            print("  Running exposure experiment...")
-            exp_results = run_exposure_experiment(
-                model, items, scale_name, scales,
-                sel_name, sel_config, exposure_test_lengths, seed=args.seed,
-                imputation_model=imputation_model,
-                response_cardinality=response_cardinality)
-
-            for tl, data in exp_results.items():
-                out_path = os.path.join(
-                    output_dir,
-                    f'{args.dataset}_exposure_{sel_name}_t{tl}.npz')
-                np.savez_compressed(out_path,
-                                    n_items=n_items,
-                                    test_length=tl,
-                                    range_names=data['range_names'],
-                                    session_counts=data['session_counts'],
-                                    unique_items=data['unique_items'])
-            print(f"  Saved exposure: {output_dir}/")
+        # Exposure is derived from item_trajectories in the accuracy
+        # results — no separate exposure experiment needed.
 
         gc.collect()
 
