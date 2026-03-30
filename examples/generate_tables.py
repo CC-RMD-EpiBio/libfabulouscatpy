@@ -36,9 +36,14 @@ OLD_NAMES = {
 }
 
 DATASETS = {
-    'grit': {'label': 'GRIT', 'items': 12, 'K': 5,  'test_lengths': [5, 10]},
-    'npi':  {'label': 'NPI',  'items': 40, 'K': 2,  'test_lengths': [5, 10, 20]},
-    'tma':  {'label': 'TMA',  'items': 50, 'K': 2,  'test_lengths': [5, 10]},
+    'rwa':  {'label': 'RWA',  'items': 22,  'K': 9,  'test_lengths': [5, 10, 20]},
+    'npi':  {'label': 'NPI',  'items': 40,  'K': 2,  'test_lengths': [5, 10, 20]},
+    'tma':  {'label': 'TMA',  'items': 50,  'K': 2,  'test_lengths': [5, 10, 20]},
+    'eqsq': {'label': 'EQSQ', 'items': 120, 'K': 4,  'test_lengths': [5, 10, 20]},
+    'grit': {'label': 'GRIT', 'items': 12,  'K': 5,  'test_lengths': [5, 10]},
+    'scs':  {'label': 'SCS',  'items': 10,  'K': 4,  'test_lengths': [5, 10]},
+    'gcbs': {'label': 'GCBS', 'items': 15,  'K': 5,  'test_lengths': [5, 10]},
+    'wpi':  {'label': 'WPI',  'items': 116, 'K': 2,  'test_lengths': [5, 10, 20]},
 }
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +60,8 @@ def load_metric(dataset, method_key, metric):
     if not os.path.exists(path):
         return None
     data = np.load(path)
+    if 'item_trajectories' not in data:
+        return None
     return data[metric]
 
 
@@ -72,7 +79,7 @@ def generate_l2_table():
     print(r'\centering')
     print(r'\caption{\textbf{Absolute score error} '
           r'$|\hat\theta_{\text{CAT}} - \hat\theta_{\text{full}}|$, '
-          r'mean (SD), under $\mathcal{M}$-open simulation (500 replicates per ability).')
+          r'mean (SD), under $\mathcal{M}$-open simulation (100 replicates per ability).')
     print(r'Lower is better; \textbf{bold} = best mean per row.')
     print(r'F = Fisher; BF = Bayesian Fisher; GI = global information; '
           r'BV = Bayesian variance; E = entropy (greedy); SE = entropy (stochastic).}')
