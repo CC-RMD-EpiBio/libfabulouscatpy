@@ -217,7 +217,7 @@ def run_accuracy_experiment(model, items, scale_name, scales,
     l2 = np.full((n_abilities, N_REPLICATES, max_items), np.nan)
     se = np.full((n_abilities, N_REPLICATES, max_items), np.nan)
 
-    log_prior_fn = {scale_name: gaussian_dens(1.0)}
+    log_prior_fn = {scale_name: gaussian_dens(2.0)}
 
     for ai, theta_val in enumerate(TRUE_ABILITIES):
         theta = {scale_name: np.atleast_1d(theta_val)}
@@ -307,7 +307,7 @@ def run_exposure_experiment(model, items, scale_name, scales,
     respondent abilities uniformly within the range and accumulates the
     set of unique items seen across increasing numbers of sessions.
     """
-    log_prior_fn = {scale_name: gaussian_dens(1.0)}
+    log_prior_fn = {scale_name: gaussian_dens(2.0)}
     range_names = list(EXPOSURE_RANGES.keys())
     n_ranges = len(range_names)
     n_session_counts = len(N_EXPOSURE_SESSIONS)
