@@ -42,7 +42,7 @@ INTERPOLATION_PTS = np.arange(-6.0, 6.0, step=0.03)
 
 # Simulation protocol (matching the paper)
 TRUE_ABILITIES = np.arange(-3, 3.5, 0.5)  # {-3, -2.5, ..., 2.5, 3}
-N_REPLICATES = 500
+N_REPLICATES = 100
 TEST_LENGTHS = [5, 10, 20, 30, 40]
 
 # Exposure experiment
@@ -192,7 +192,7 @@ def make_selector_kwargs(items, scales, model, scoring):
         'items': items,
         'scales': scales,
         'model': model,
-        'temperature': 0.01,
+        'temperature': 1.0,
         'randomize_items': True,
         'randomize_scales': False,
         'precision_limit': 0.0,   # no early stopping by precision
@@ -240,9 +240,11 @@ def run_accuracy_experiment(model, items, scale_name, scales,
             true_scores = scoring_truth.score_responses(true_responses_scoring)
 
             # Fresh scorer + selector for CAT
+            # All methods use the same baseline scoring (no imputation)
+            # so the comparison isolates the selection criterion
             scoring = BayesianScoring(
                 model=model, log_prior_fn=log_prior_fn,
-                imputation_model=imputation_model)
+                imputation_model=None)
             common_kwargs = make_selector_kwargs(items, scales, model, scoring)
             sel = selector_config['class'](
                 scoring=scoring,
@@ -285,6 +287,15 @@ def run_accuracy_experiment(model, items, scale_name, scales,
     return {'kl': kl, 'l2': l2, 'se': se}
 
 
+EXPOSURE_RANGES = {
+    'low': (-3.0, -1.5),
+    'mid': (-1.0, 1.0),
+    'high': (1.5, 3.0),
+}
+N_EXPOSURE_SESSIONS = [16, 32, 64, 100]
+N_EXPOSURE_REPLICATES = 50
+
+
 def run_exposure_experiment(model, items, scale_name, scales,
                             selector_name, selector_config,
                             test_lengths, seed=42,
@@ -292,65 +303,78 @@ def run_exposure_experiment(model, items, scale_name, scales,
                             response_cardinality=None):
     """Run the exposure experiment for one selector at multiple test lengths.
 
-    For each test length t, runs EXPOSURE_SESSIONS sessions of t items each
-    and counts the total unique items exposed.
+    For each test length t and ability range (low/mid/high), samples
+    respondent abilities uniformly within the range and accumulates the
+    set of unique items seen across increasing numbers of sessions.
     """
-    n_session_counts = len(EXPOSURE_SESSIONS)
-    max_sessions = max(EXPOSURE_SESSIONS)
-    n_exposure_replicates = 100
     log_prior_fn = {scale_name: gaussian_dens(1.0)}
+    range_names = list(EXPOSURE_RANGES.keys())
+    n_ranges = len(range_names)
+    n_session_counts = len(N_EXPOSURE_SESSIONS)
+    max_sessions = max(N_EXPOSURE_SESSIONS)
 
-    # Results: one set per test length
     results = {}
     for tl in test_lengths:
-        unique_items = np.full((n_session_counts, n_exposure_replicates), np.nan)
+        # unique_items[ri, si, rep] = unique items after si sessions
+        # for ability range ri
+        unique_items = np.full(
+            (n_ranges, n_session_counts, N_EXPOSURE_REPLICATES), np.nan)
 
-        for rep in range(n_exposure_replicates):
-            np.random.seed(seed + 10000 + tl * 1000 + rep)
-            seen_items = set()
+        for ri, rname in enumerate(range_names):
+            lo, hi = EXPOSURE_RANGES[rname]
+            for rep in range(N_EXPOSURE_REPLICATES):
+                np.random.seed(seed + 30000 + tl * 10000 + ri * 1000 + rep)
+                seen = set()
 
-            for sess in range(max_sessions):
-                theta_val = np.random.randn()
+                for sess in range(max_sessions):
+                    theta_val = np.random.uniform(lo, hi)
 
-                scoring = BayesianScoring(
-                    model=model, log_prior_fn=log_prior_fn,
-                    imputation_model=imputation_model)
-                common_kwargs = make_selector_kwargs(items, scales, model, scoring)
-                sel = selector_config['class'](
-                    scoring=scoring,
-                    **selector_config['kwargs'],
-                    **common_kwargs,
-                )
-                tracker = CatSessionTracker(
-                    session=CatSession(), scales=[scale_name])
+                    scoring = BayesianScoring(
+                        model=model, log_prior_fn=log_prior_fn,
+                        imputation_model=None)
+                    common_kwargs = make_selector_kwargs(
+                        items, scales, model, scoring)
+                    sel = selector_config['class'](
+                        scoring=scoring,
+                        **selector_config['kwargs'],
+                        **common_kwargs,
+                    )
+                    tracker = CatSessionTracker(
+                        session=CatSession(), scales=[scale_name])
 
-                true_responses = sample_from_ensemble(
-                    model, scale_name, theta_val, imputation_model,
-                    n_categories=response_cardinality)
-                true_responses_scoring = {k: v + 1 for k, v in true_responses.items()}
+                    true_responses = sample_from_ensemble(
+                        model, scale_name, theta_val, imputation_model,
+                        n_categories=response_cardinality)
+                    true_responses_scoring = {
+                        k: v + 1 for k, v in true_responses.items()}
 
-                for step in range(tl):
-                    item_dict = sel.next_item(tracker, scale=scale_name)
-                    if item_dict is None or item_dict == {}:
-                        break
-                    item_id = item_dict['item']
-                    response = true_responses_scoring[item_id]
-                    tracker.responses[item_id] = response
+                    for step in range(tl):
+                        item_dict = sel.next_item(tracker, scale=scale_name)
+                        if item_dict is None or item_dict == {}:
+                            break
+                        item_id = item_dict['item']
+                        response = true_responses_scoring[item_id]
+                        tracker.responses[item_id] = response
 
-                    scores = scoring.score_responses(tracker.responses)
-                    for s in scores:
-                        tracker.scores[s] = scores[s].score
-                        tracker.errors[s] = scores[s].error
+                        scores = scoring.score_responses(tracker.responses)
+                        for s in scores:
+                            tracker.scores[s] = scores[s].score
+                            tracker.errors[s] = scores[s].error
 
-                    seen_items.add(item_id)
+                        seen.add(item_id)
 
-                for si, n_sess in enumerate(EXPOSURE_SESSIONS):
-                    if sess + 1 == n_sess:
-                        unique_items[si, rep] = len(seen_items)
+                    for si, n_sess in enumerate(N_EXPOSURE_SESSIONS):
+                        if sess + 1 == n_sess:
+                            unique_items[ri, si, rep] = len(seen)
 
-        results[tl] = unique_items
-        print(f"    t={tl}: mean unique at 32 sessions = "
-              f"{np.nanmean(unique_items[2]):.1f}")
+            print(f"    t={tl} {rname}: {unique_items[ri, 2, :].mean():.1f} "
+                  f"unique at 32 sessions")
+
+        results[tl] = {
+            'unique_items': unique_items,
+            'range_names': range_names,
+            'session_counts': N_EXPOSURE_SESSIONS,
+        }
 
     return results
 
@@ -500,23 +524,16 @@ def main():
                 imputation_model=imputation_model,
                 response_cardinality=response_cardinality)
 
-            for tl, unique_items in exp_results.items():
+            for tl, data in exp_results.items():
                 out_path = os.path.join(
                     output_dir,
                     f'{args.dataset}_exposure_{sel_name}_t{tl}.npz')
                 np.savez_compressed(out_path,
-                                    exposure_sessions=np.array(EXPOSURE_SESSIONS),
                                     n_items=n_items,
                                     test_length=tl,
-                                    unique_items=unique_items)
-            # Also save combined for backward compat (using largest test length)
-            largest_tl = max(exposure_test_lengths)
-            out_path = os.path.join(
-                output_dir, f'{args.dataset}_exposure_{sel_name}.npz')
-            np.savez_compressed(out_path,
-                                exposure_sessions=np.array(EXPOSURE_SESSIONS),
-                                n_items=n_items,
-                                unique_items=exp_results[largest_tl])
+                                    range_names=data['range_names'],
+                                    session_counts=data['session_counts'],
+                                    unique_items=data['unique_items'])
             print(f"  Saved exposure: {output_dir}/")
 
         gc.collect()
