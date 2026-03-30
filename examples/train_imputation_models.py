@@ -18,6 +18,8 @@ import sys
 import numpy as np
 
 DATASET_CONFIGS = {
+    'scs': {'module': 'bayesianquilts.data.scs', 'n_top_features': 10},
+    'gcbs': {'module': 'bayesianquilts.data.gcbs', 'n_top_features': 15},
     'grit': {'module': 'bayesianquilts.data.grit', 'n_top_features': 12},
     'rwa': {'module': 'bayesianquilts.data.rwa', 'n_top_features': 22},
     'npi': {'module': 'bayesianquilts.data.npi', 'n_top_features': 40},
