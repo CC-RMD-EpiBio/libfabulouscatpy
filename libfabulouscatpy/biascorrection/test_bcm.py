@@ -1,0 +1,160 @@
+"""Round-trip + behavioral tests for libfab BCM that mirror the Go
+parity tests in gofluttercat/backend-golang/pkg/biascorrection."""
+
+import json
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from libfabulouscatpy.biascorrection import BCM, BCMSet, fit_bcm, fit_bcm_set
+
+
+def test_bcm_apply_monotone():
+    bcm = BCM(
+        x_thresholds=[-2.0, -1.0, 0.0, 1.0, 2.0],
+        y_thresholds=[-1.5, -0.7, 0.0, 0.7, 1.5],
+    )
+    # Exact knot matches.
+    for x, y in zip(bcm.x_thresholds, bcm.y_thresholds):
+        assert bcm.apply(float(x)) == pytest.approx(float(y), abs=1e-12)
+    # Linear interpolation midpoint.
+    assert bcm.apply(-0.5) == pytest.approx(-0.35, abs=1e-12)
+    # Clipping.
+    assert bcm.apply(-99.0) == pytest.approx(-1.5)
+    assert bcm.apply(99.0) == pytest.approx(1.5)
+    # Vectorized.
+    out = bcm.apply(np.array([-99, 0, 99]))
+    np.testing.assert_allclose(out, [-1.5, 0.0, 1.5])
+
+
+def test_bcm_validate_rejects_bad_input():
+    with pytest.raises(ValueError, match="shape mismatch"):
+        BCM(x_thresholds=[0, 1], y_thresholds=[0])
+    with pytest.raises(ValueError, match="at least 2"):
+        BCM(x_thresholds=[0], y_thresholds=[0])
+    with pytest.raises(ValueError, match="non-decreasing"):
+        BCM(x_thresholds=[1, 0], y_thresholds=[0, 1])
+    with pytest.raises(ValueError, match="non-decreasing"):
+        BCM(x_thresholds=[0, 1], y_thresholds=[1, 0])
+
+
+def test_bcmset_for_subset_fallback():
+    bcm5 = BCM(
+        x_thresholds=[-1, 1],
+        y_thresholds=[0, 0.5],
+        subset_size=5,
+    )
+    bcm10 = BCM(
+        x_thresholds=[-1, 1],
+        y_thresholds=[-0.5, 0.5],
+        subset_size=10,
+    )
+    s = BCMSet(scale="t", maps={5: bcm5, 10: bcm10})
+    assert s.for_subset(5) is bcm5
+    assert s.for_subset(10) is bcm10
+    # |7-5|=2 < |7-10|=3
+    assert s.for_subset(7) is bcm5
+    # |8-10|=2 < |8-5|=3
+    assert s.for_subset(8) is bcm10
+    assert BCMSet().for_subset(5) is None
+
+
+def test_fit_bcm_matches_sklearn_predict():
+    """Fit a BCM and verify .apply matches sklearn IsotonicRegression.predict."""
+    pytest.importorskip("sklearn")
+    from sklearn.isotonic import IsotonicRegression
+
+    rng = np.random.default_rng(7)
+    x = rng.uniform(-3, 3, size=400)
+    y = 0.7 * x - 0.2 + rng.normal(0, 0.4, size=400)
+    bcm = fit_bcm(x, y, scale="test", subset_size=10)
+    iso = IsotonicRegression(out_of_bounds="clip").fit(x, y)
+    probes = np.linspace(-4, 4, 71)
+    np.testing.assert_allclose(bcm.apply(probes), iso.predict(probes), atol=1e-12)
+
+
+def test_roundtrip_bcm_json(tmp_path: Path):
+    bcm = BCM(
+        x_thresholds=[-1.0, 0.0, 1.0],
+        y_thresholds=[-0.5, 0.0, 0.5],
+        scale="scs", subset_size=5,
+    )
+    p = tmp_path / "bcm.json"
+    bcm.save(p)
+    loaded = BCM.load(p)
+    assert loaded.scale == "scs"
+    assert loaded.subset_size == 5
+    np.testing.assert_allclose(loaded.x_thresholds, bcm.x_thresholds)
+    np.testing.assert_allclose(loaded.y_thresholds, bcm.y_thresholds)
+    np.testing.assert_allclose(loaded.apply(0.5), bcm.apply(0.5))
+
+
+def test_roundtrip_bcmset_json(tmp_path: Path):
+    pytest.importorskip("sklearn")
+    rng = np.random.default_rng(11)
+    cells = {}
+    for j in (5, 10, 20):
+        x = rng.uniform(-3, 3, size=200)
+        y = (0.5 + 0.05 * j / 20) * x + rng.normal(0, 0.4, size=200)
+        cells[j] = (x, y)
+    bcm_set = fit_bcm_set(cells, scale="synthetic")
+    p = tmp_path / "set.json"
+    bcm_set.save(p)
+    loaded = BCMSet.load(p)
+    assert loaded.scale == "synthetic"
+    assert sorted(loaded.maps.keys()) == [5, 10, 20]
+    for j in (5, 10, 20):
+        np.testing.assert_allclose(
+            loaded.maps[j].apply(0.5), bcm_set.maps[j].apply(0.5))
+        # The on-disk format must match the gofluttercat consumer schema:
+        d = loaded.to_dict()
+        assert "scale" in d and "maps" in d
+        assert str(j) in d["maps"]
+        assert {"subset_size", "x_thresholds", "y_thresholds"} <= set(
+            d["maps"][str(j)].keys())
+
+
+def _go_fixture_dir() -> Path:
+    return (
+        Path(__file__).resolve().parents[2]
+        / ".." / "gofluttercat" / "backend-golang" / "pkg"
+        / "biascorrection" / "testdata"
+    )
+
+
+def test_libfab_can_load_go_fixture():
+    """The fixture format the Go parity test loads is consumable here."""
+    fixture_path = _go_fixture_dir() / "bcm_fixture.json"
+    if not fixture_path.exists():
+        pytest.skip(f"go fixture not present at {fixture_path}")
+    bcm_set = BCMSet.load(fixture_path)
+    assert bcm_set.scale == "synthetic"
+    assert sorted(bcm_set.maps.keys()) == [5, 10, 20]
+    for j in (5, 10, 20):
+        out = bcm_set.maps[j].apply(np.array([-2.0, 0.0, 2.0]))
+        assert out.shape == (3,)
+        assert np.all(np.isfinite(out))
+
+
+def test_libfab_apply_matches_go_fixture_predictions():
+    """Load the Go testdata fixture and verify libfab .apply reproduces
+    the same expected predictions that the Go side asserts on (which were
+    generated by sklearn IsotonicRegression.predict). Confirms that the
+    JSON format and the apply semantics are identical between
+    libfabulouscatpy and gofluttercat."""
+    fixture_path = _go_fixture_dir() / "bcm_fixture.json"
+    pred_path = _go_fixture_dir() / "bcm_predictions.json"
+    if not (fixture_path.exists() and pred_path.exists()):
+        pytest.skip(f"go fixture / predictions not present in {_go_fixture_dir()}")
+    bcm_set = BCMSet.load(fixture_path)
+    preds = json.loads(pred_path.read_text())
+    for j_str, probes in preds.items():
+        bcm = bcm_set.maps[int(j_str)]
+        for p in probes:
+            got = float(bcm.apply(p["input"]))
+            want = float(p["expected"])
+            assert got == pytest.approx(want, abs=1e-12), (
+                f"libfab apply for J={j_str} input={p['input']} "
+                f"got {got} want {want}"
+            )
