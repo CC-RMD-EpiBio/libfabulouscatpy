@@ -68,7 +68,11 @@ DEFAULT_MODEL_DIRS = {k: os.path.expanduser(
 
 
 def extract_params(model_dir, dataset_name, n_samples=1000, seed=42):
-    """Load a fitted GRM and extract slope/calibration via surrogate sampling.
+    """Load a fitted GRM and extract slope/calibration via IS-corrected surrogate.
+
+    Draws samples from the ADVI surrogate, computes importance weights
+    using the unnormalized log posterior vs the surrogate log density,
+    applies PSIS smoothing, then takes weighted posterior means.
 
     Returns:
         dict with keys: slope, calibration, item_keys, response_cardinality
@@ -87,6 +91,17 @@ def extract_params(model_dir, dataset_name, n_samples=1000, seed=42):
     print(f"Loading model from {model_dir}")
     model = GRModel.load_from_disk(model_dir)
 
+    # Load data for computing the log-likelihood
+    get_data_kwargs = {'polars_out': True}
+    import inspect
+    if 'reorient' in inspect.signature(mod.get_data).parameters:
+        get_data_kwargs['reorient'] = True
+    df, num_people = mod.get_data(**get_data_kwargs)
+    data = {}
+    for col in df.columns:
+        data[col] = df[col].to_numpy().astype(np.float32)
+    data['person'] = np.arange(num_people, dtype=np.float32)
+
     # Sample from surrogate posterior
     print(f"Sampling {n_samples} draws from surrogate posterior...")
     surrogate = model.surrogate_distribution_generator(model.params)
@@ -94,37 +109,59 @@ def extract_params(model_dir, dataset_name, n_samples=1000, seed=42):
     samples = surrogate.sample(n_samples, seed=key)
     model.surrogate_sample = samples
 
+    # Compute importance weights: log w_s = log p(data, theta_s) - log q(theta_s)
+    print("  Computing importance weights...")
+
+    # Compute log joint for all samples at once (batched)
+    log_joints = np.array(model.unormalized_log_prob(data, **samples)).squeeze()
+
+    # Surrogate log prob for all samples
+    surrogate_dist = model.surrogate_distribution_generator(model.params)
+    log_surrogates = np.array(surrogate_dist.log_prob(samples)).squeeze()
+
+    log_weights = log_joints - log_surrogates
+
+    # PSIS smoothing
+    from bayesianquilts.metrics.nppsis import psislw
+    log_weights_smoothed, khat = psislw(log_weights)
+    print(f"  PSIS k-hat: {khat:.3f}")
+    if khat > 0.7:
+        print(f"  WARNING: k-hat {khat:.3f} > 0.7, IS correction may be unreliable")
+        print(f"  Falling back to unweighted surrogate mean")
+        weights = np.ones(n_samples) / n_samples
+    else:
+        weights = np.exp(log_weights_smoothed)
+        weights /= weights.sum()
+
+    n_eff = 1.0 / np.sum(weights ** 2)
+    print(f"  Effective sample size: {n_eff:.0f} / {n_samples}")
+
     # Standardize so theta ~ N(0,1) in the calibration population
+    # Use unweighted standardize (the IS weights correct parameter means,
+    # not the ability scale)
     print("  Standardizing abilities...")
     stats = model.standardize_abilities()
     samples = model.surrogate_sample  # now rescaled in-place
     print(f"  mu={np.array(stats['mu']).squeeze():.4f}, "
           f"sigma={np.array(stats['sigma']).squeeze():.4f}")
 
-    # Take mean across samples — bijectors already applied by surrogate
-    # discriminations: shape (n_samples, 1, dim, n_items, 1) -> mean -> squeeze
+    # IS-weighted mean across samples
     disc_samples = np.array(samples['discriminations'])
-    slope = np.mean(disc_samples, axis=0).squeeze()  # (n_items,)
+    slope = np.tensordot(weights, disc_samples, axes=([0], [0])).squeeze()
 
-    # difficulties0: shape (n_samples, 1, dim, n_items, 1) -> mean -> squeeze
     diff0_samples = np.array(samples['difficulties0'])
-    diff0 = np.mean(diff0_samples, axis=0).squeeze()  # (n_items,)
+    diff0 = np.tensordot(weights, diff0_samples, axes=([0], [0])).squeeze()
 
     if response_cardinality > 2 and 'ddifficulties' in samples:
-        # ddifficulties: shape (n_samples, 1, dim, n_items, K-2) -> mean -> squeeze
         ddiff_samples = np.array(samples['ddifficulties'])
-        ddiff = np.mean(ddiff_samples, axis=0).squeeze()  # (n_items, K-2)
+        ddiff = np.tensordot(weights, ddiff_samples, axes=([0], [0])).squeeze()
 
-        # Reconstruct calibration thresholds via cumulative sum
-        # calibration[:, 0] = diff0
-        # calibration[:, j] = diff0 + sum(ddiff[:, :j]) for j >= 1
         calibration = np.zeros((len(item_keys), response_cardinality - 1))
         calibration[:, 0] = diff0
         for j in range(1, response_cardinality - 1):
             calibration[:, j] = calibration[:, j - 1] + ddiff[:, j - 1]
     else:
-        # Binary (K=2): single threshold per item
-        calibration = diff0[:, np.newaxis]  # (n_items, 1)
+        calibration = diff0[:, np.newaxis]
 
     print(f"  Items: {len(item_keys)}, K: {response_cardinality}")
     print(f"  Slope range: [{slope.min():.3f}, {slope.max():.3f}]")
@@ -135,9 +172,10 @@ def extract_params(model_dir, dataset_name, n_samples=1000, seed=42):
         'calibration': calibration,
         'item_keys': np.array(item_keys),
         'response_cardinality': response_cardinality,
+        'khat': khat,
+        'n_eff': n_eff,
     }
 
-    # Free JAX memory
     del model, surrogate, samples, disc_samples, diff0_samples
     if response_cardinality > 2:
         del ddiff_samples
