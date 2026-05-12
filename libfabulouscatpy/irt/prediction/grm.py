@@ -180,14 +180,16 @@ class GradedResponseModel(IRTModel):
         if not observed_only:
             return np.log(p + 1e-20)
         selected = np.array(list(responses.values()))
-        p_observed = p.T[selected-1].T
-
-        p_observed = np.sum(np.log(p_observed + 1e-20), axis=-1)
-        p_observed = np.sum(p_observed, axis=-1)
-
-        #
-
-        return p_observed
+        # p shape (M_grid, N_items, K_categories). For each item n we want
+        # log P(y_n = selected[n] | item n, theta_m) -- the diagonal of the
+        # N x N cross-indexed matrix that the previous implementation
+        # accidentally summed in full. Take the response category per item
+        # via fancy indexing along the last axis, then sum log-probs over
+        # items to get the joint log-likelihood per grid point.
+        N_items = p.shape[1]
+        log_p = np.log(p + 1e-20)
+        log_p_observed = log_p[:, np.arange(N_items), selected - 1]
+        return np.sum(log_p_observed, axis=-1)
 
     def sample(self, theta: npt.NDArray[Any]) -> dict[str:int]:
         augmented_calibration = np.empty(
