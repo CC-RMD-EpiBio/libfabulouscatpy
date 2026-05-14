@@ -25,6 +25,18 @@ JSON shape (a Set of BCMs, one per subset size for the same scale)::
         "10": {"subset_size": 10, "x_thresholds": [...], "y_thresholds": [...]}
       }
     }
+
+BCMConditional
+--------------
+A bivariate extension that conditions on the Fisher information of the
+administered subset at theta=0 in addition to the subset score. The
+corrector is backed by an sklearn HistGradientBoostingRegressor with a
+monotonic constraint on the score feature (feature 0 must be
+non-decreasing in the prediction) and an unconstrained smooth
+dimension for the Fisher information feature (feature 1). A 5-fold
+cross-validated held-out prediction is produced at fit time and stored
+in ``oof_predictions``. Persistence is via joblib dump (HistGBR is not
+trivially JSON-serialisable).
 """
 from __future__ import annotations
 
@@ -208,3 +220,182 @@ def fit_bcm_set(
             subset_size=int(j),
         )
     return out
+
+
+class BCMConditional:
+    """Bivariate BCM: monotone in subset score, smooth in subset Fisher info.
+
+    Backed by ``sklearn.ensemble.HistGradientBoostingRegressor`` with
+    ``monotonic_cst=[1, 0]`` (monotone non-decreasing in feature 0 = score,
+    unconstrained in feature 1 = Fisher information of the administered
+    subset at theta=0). 5-fold cross-validated held-out predictions are
+    stored in ``oof_predictions`` after ``fit()``.
+
+    Parameters
+    ----------
+    model : HistGradientBoostingRegressor
+        Already-fitted sklearn model.
+    scale_name : str
+        Psychometric scale this corrector applies to.
+    feature_names : tuple of str
+        Names of the two input features, default ``("score", "info")``.
+    oof_predictions : np.ndarray or None
+        Out-of-fold predictions from 5-fold CV (same length as training data).
+    """
+
+    def __init__(
+        self,
+        model,
+        scale_name: str,
+        feature_names: Tuple[str, str] = ("score", "info"),
+        oof_predictions: Optional[np.ndarray] = None,
+    ) -> None:
+        self.model = model
+        self.scale_name = scale_name
+        self.feature_names = feature_names
+        self.oof_predictions = oof_predictions
+
+    def apply(self, score, info) -> np.ndarray:
+        """Return the conditional-BCM-corrected score.
+
+        Parameters
+        ----------
+        score : array-like, shape (n,)
+            Raw (imputed) subset scores.
+        info : array-like, shape (n,)
+            Subset Fisher information at theta=0, one scalar per row.
+
+        Returns
+        -------
+        np.ndarray, shape (n,)
+            Bias-corrected scores.
+        """
+        score = np.asarray(score, dtype=float).ravel()
+        info = np.asarray(info, dtype=float).ravel()
+        if score.shape != info.shape:
+            raise ValueError(
+                f"score and info must have the same length; "
+                f"got {score.shape} vs {info.shape}"
+            )
+        X = np.column_stack([score, info])
+        return self.model.predict(X)
+
+    @classmethod
+    def fit(
+        cls,
+        score: np.ndarray,
+        info: np.ndarray,
+        gold: np.ndarray,
+        scale_name: str = "",
+        n_folds: int = 5,
+        seed: int = 0,
+        max_iter: int = 200,
+        learning_rate: float = 0.05,
+        max_depth: int = 4,
+    ) -> "BCMConditional":
+        """Fit a BCMConditional via k-fold cross-validation.
+
+        Trains one ``HistGradientBoostingRegressor`` on the full data and
+        additionally collects out-of-fold (OOF) predictions via k-fold CV
+        so that held-out bias can be computed without re-fitting.
+
+        Parameters
+        ----------
+        score : array-like, shape (n,)
+            Imputed subset scores (biased).
+        info : array-like, shape (n,)
+            Subset Fisher information at theta=0.
+        gold : array-like, shape (n,)
+            Gold-standard full-bank scores (target).
+        scale_name : str
+            Name of the psychometric scale.
+        n_folds : int
+            Number of cross-validation folds (default 5).
+        seed : int
+            Random state for fold shuffle.
+        max_iter : int
+            Maximum number of boosting iterations.
+        learning_rate : float
+            Learning rate for HistGBR.
+        max_depth : int
+            Maximum tree depth.
+
+        Returns
+        -------
+        BCMConditional
+            Instance with the full-data fitted model and OOF predictions.
+        """
+        from sklearn.ensemble import HistGradientBoostingRegressor
+
+        score = np.asarray(score, dtype=float).ravel()
+        info = np.asarray(info, dtype=float).ravel()
+        gold = np.asarray(gold, dtype=float).ravel()
+
+        if not (score.shape == info.shape == gold.shape):
+            raise ValueError(
+                "score, info, and gold must all have the same length; "
+                f"got {score.shape}, {info.shape}, {gold.shape}"
+            )
+
+        valid = np.isfinite(score) & np.isfinite(info) & np.isfinite(gold)
+        if valid.sum() < 2 * n_folds:
+            raise ValueError(
+                f"BCMConditional.fit requires at least {2 * n_folds} finite "
+                f"training rows; got {int(valid.sum())}"
+            )
+
+        X = np.column_stack([score, info])
+
+        # monotonic_cst: +1 means non-decreasing for that feature.
+        # Feature 0 (score) is constrained monotone; feature 1 (info) is free.
+        full_model = HistGradientBoostingRegressor(
+            monotonic_cst=[1, 0],
+            max_iter=max_iter,
+            learning_rate=learning_rate,
+            max_depth=max_depth,
+            random_state=seed,
+        )
+        full_model.fit(X[valid], gold[valid])
+
+        # Collect OOF predictions via k-fold CV.
+        oof = np.full(len(score), np.nan, dtype=float)
+        rng = np.random.default_rng(seed)
+        idx = np.where(valid)[0]
+        rng.shuffle(idx)
+        folds = np.array_split(idx, n_folds)
+        for fk in range(n_folds):
+            test_idx = folds[fk]
+            train_idx = np.concatenate([folds[j] for j in range(n_folds) if j != fk])
+            if len(train_idx) < 2 or len(test_idx) == 0:
+                oof[test_idx] = score[test_idx]
+                continue
+            fold_model = HistGradientBoostingRegressor(
+                monotonic_cst=[1, 0],
+                max_iter=max_iter,
+                learning_rate=learning_rate,
+                max_depth=max_depth,
+                random_state=seed,
+            )
+            fold_model.fit(X[train_idx], gold[train_idx])
+            oof[test_idx] = fold_model.predict(X[test_idx])
+
+        # For any invalid rows fall back to raw score.
+        nan_mask = ~np.isfinite(oof)
+        oof[nan_mask] = score[nan_mask]
+
+        return cls(
+            model=full_model,
+            scale_name=scale_name,
+            oof_predictions=oof,
+        )
+
+    def save(self, path) -> None:
+        """Persist the fitted model to ``path`` using joblib."""
+        import joblib
+        joblib.dump(self, path)
+
+    @classmethod
+    def load(cls, path) -> "BCMConditional":
+        """Load a persisted BCMConditional from ``path``."""
+        import joblib
+        return joblib.load(path)
