@@ -222,8 +222,11 @@ def fit_bcm_set(
     return out
 
 
-class BCMConditional:
-    """Bivariate BCM: monotone in subset score, smooth in subset Fisher info.
+class BCMConditionalInfo:
+    """Legacy bivariate BCM: monotone in subset score, smooth in subset Fisher info.
+
+    Kept for backward compatibility with scalar-info artifacts.  New code
+    should use ``BCMConditional`` (item-indicator variant) instead.
 
     Backed by ``sklearn.ensemble.HistGradientBoostingRegressor`` with
     ``monotonic_cst=[1, 0]`` (monotone non-decreasing in feature 0 = score,
@@ -292,39 +295,8 @@ class BCMConditional:
         max_iter: int = 200,
         learning_rate: float = 0.05,
         max_depth: int = 4,
-    ) -> "BCMConditional":
-        """Fit a BCMConditional via k-fold cross-validation.
-
-        Trains one ``HistGradientBoostingRegressor`` on the full data and
-        additionally collects out-of-fold (OOF) predictions via k-fold CV
-        so that held-out bias can be computed without re-fitting.
-
-        Parameters
-        ----------
-        score : array-like, shape (n,)
-            Imputed subset scores (biased).
-        info : array-like, shape (n,)
-            Subset Fisher information at theta=0.
-        gold : array-like, shape (n,)
-            Gold-standard full-bank scores (target).
-        scale_name : str
-            Name of the psychometric scale.
-        n_folds : int
-            Number of cross-validation folds (default 5).
-        seed : int
-            Random state for fold shuffle.
-        max_iter : int
-            Maximum number of boosting iterations.
-        learning_rate : float
-            Learning rate for HistGBR.
-        max_depth : int
-            Maximum tree depth.
-
-        Returns
-        -------
-        BCMConditional
-            Instance with the full-data fitted model and OOF predictions.
-        """
+    ) -> "BCMConditionalInfo":
+        """Fit a BCMConditionalInfo via k-fold cross-validation."""
         from sklearn.ensemble import HistGradientBoostingRegressor
 
         score = np.asarray(score, dtype=float).ravel()
@@ -340,14 +312,12 @@ class BCMConditional:
         valid = np.isfinite(score) & np.isfinite(info) & np.isfinite(gold)
         if valid.sum() < 2 * n_folds:
             raise ValueError(
-                f"BCMConditional.fit requires at least {2 * n_folds} finite "
+                f"BCMConditionalInfo.fit requires at least {2 * n_folds} finite "
                 f"training rows; got {int(valid.sum())}"
             )
 
         X = np.column_stack([score, info])
 
-        # monotonic_cst: +1 means non-decreasing for that feature.
-        # Feature 0 (score) is constrained monotone; feature 1 (info) is free.
         full_model = HistGradientBoostingRegressor(
             monotonic_cst=[1, 0],
             max_iter=max_iter,
@@ -357,7 +327,6 @@ class BCMConditional:
         )
         full_model.fit(X[valid], gold[valid])
 
-        # Collect OOF predictions via k-fold CV.
         oof = np.full(len(score), np.nan, dtype=float)
         rng = np.random.default_rng(seed)
         idx = np.where(valid)[0]
@@ -379,6 +348,223 @@ class BCMConditional:
             fold_model.fit(X[train_idx], gold[train_idx])
             oof[test_idx] = fold_model.predict(X[test_idx])
 
+        nan_mask = ~np.isfinite(oof)
+        oof[nan_mask] = score[nan_mask]
+
+        return cls(
+            model=full_model,
+            scale_name=scale_name,
+            oof_predictions=oof,
+        )
+
+    def save(self, path) -> None:
+        """Persist the fitted model to ``path`` using joblib."""
+        import joblib
+        joblib.dump(self, path)
+
+    @classmethod
+    def load(cls, path) -> "BCMConditionalInfo":
+        """Load a persisted BCMConditionalInfo from ``path``."""
+        import joblib
+        return joblib.load(path)
+
+
+class BCMConditional:
+    """Subset-specific BCM: monotone in score, per-item membership indicators.
+
+    A gradient-boosted regression corrector whose feature matrix is
+    ``[score, item_1, item_2, ..., item_I]`` where ``score`` is the imputed
+    subset EAP score (monotone constraint = 1) and each ``item_k`` is a
+    binary indicator that equals 1 when item k was included in the
+    administered subset (unconstrained, constraint = 0).
+
+    This representation lets the corrector learn a distinct bias-adjustment
+    curve for every possible subset composition rather than collapsing subsets
+    that share the same scalar Fisher information into a single correction.
+    The monotone constraint on the score feature ensures that a higher raw
+    score always maps to a higher corrected score, preserving rank order.
+
+    Backed by ``sklearn.ensemble.HistGradientBoostingRegressor`` with
+    ``monotonic_cst=[1] + [0] * I``. 5-fold cross-validated held-out
+    predictions are stored in ``oof_predictions`` after ``fit()``.
+    Persistence is via joblib (HistGBR is not trivially JSON-serialisable).
+
+    Parameters
+    ----------
+    model : HistGradientBoostingRegressor
+        Already-fitted sklearn model.
+    scale_name : str
+        Psychometric scale this corrector applies to.
+    item_keys : list of str
+        Ordered list of item keys, length I.  The feature matrix expected by
+        ``apply()`` must have columns [score, indicator_item_keys[0], ...].
+    oof_predictions : np.ndarray or None
+        Out-of-fold predictions from 5-fold CV (same length as training data).
+    """
+
+    def __init__(
+        self,
+        model,
+        scale_name: str,
+        item_keys,
+        oof_predictions: Optional[np.ndarray] = None,
+    ) -> None:
+        self.model = model
+        self.scale_name = scale_name
+        self.item_keys = list(item_keys)
+        self.oof_predictions = oof_predictions
+
+    def apply(self, score, item_indicators) -> np.ndarray:
+        """Return the subset-specific BCM-corrected score.
+
+        Parameters
+        ----------
+        score : array-like, shape (n,)
+            Raw (imputed) subset scores.
+        item_indicators : array-like, shape (n, I)
+            Binary matrix: row i, column k is 1 if item k was in this
+            respondent's subset, 0 otherwise.  Column order must match
+            ``self.item_keys``.
+
+        Returns
+        -------
+        np.ndarray, shape (n,)
+            Bias-corrected scores.
+        """
+        score = np.asarray(score, dtype=float).ravel()
+        indicators = np.asarray(item_indicators, dtype=float)
+        if indicators.ndim == 1:
+            indicators = indicators.reshape(1, -1)
+        if score.shape[0] != indicators.shape[0]:
+            raise ValueError(
+                f"score length ({score.shape[0]}) != indicators rows "
+                f"({indicators.shape[0]})"
+            )
+        if indicators.shape[1] != len(self.item_keys):
+            raise ValueError(
+                f"indicators has {indicators.shape[1]} columns but "
+                f"item_keys has length {len(self.item_keys)}"
+            )
+        X = np.column_stack([score, indicators])
+        return self.model.predict(X)
+
+    @classmethod
+    def fit(
+        cls,
+        score: np.ndarray,
+        item_indicators: np.ndarray,
+        gold: np.ndarray,
+        item_keys,
+        scale_name: str = "",
+        n_folds: int = 5,
+        seed: int = 0,
+        max_iter: int = 200,
+        learning_rate: float = 0.05,
+        max_depth: int = 4,
+    ) -> "BCMConditional":
+        """Fit a BCMConditional via k-fold cross-validation.
+
+        Trains one ``HistGradientBoostingRegressor`` on the full data and
+        additionally collects out-of-fold (OOF) predictions via k-fold CV
+        so that held-out bias can be computed without re-fitting.
+
+        Parameters
+        ----------
+        score : array-like, shape (n,)
+            Imputed subset scores (biased).
+        item_indicators : array-like, shape (n, I)
+            Binary matrix: entry [i, k] = 1 if item k was in the i-th
+            (draw, person) pair's subset, 0 otherwise.
+        gold : array-like, shape (n,)
+            Gold-standard full-bank scores (target).
+        item_keys : sequence of str
+            Ordered item key names, length I.
+        scale_name : str
+            Name of the psychometric scale.
+        n_folds : int
+            Number of cross-validation folds (default 5).
+        seed : int
+            Random state for fold shuffle.
+        max_iter : int
+            Maximum number of boosting iterations.
+        learning_rate : float
+            Learning rate for HistGBR.
+        max_depth : int
+            Maximum tree depth.
+
+        Returns
+        -------
+        BCMConditional
+            Instance with the full-data fitted model and OOF predictions.
+        """
+        from sklearn.ensemble import HistGradientBoostingRegressor
+
+        score = np.asarray(score, dtype=float).ravel()
+        indicators = np.asarray(item_indicators, dtype=float)
+        if indicators.ndim == 1:
+            indicators = indicators.reshape(-1, 1)
+        gold = np.asarray(gold, dtype=float).ravel()
+        item_keys = list(item_keys)
+        I = len(item_keys)
+
+        if score.shape[0] != indicators.shape[0] or score.shape[0] != gold.shape[0]:
+            raise ValueError(
+                "score, item_indicators, and gold must all have the same "
+                f"number of rows; got {score.shape[0]}, {indicators.shape[0]}, "
+                f"{gold.shape[0]}"
+            )
+        if indicators.shape[1] != I:
+            raise ValueError(
+                f"item_indicators has {indicators.shape[1]} columns but "
+                f"item_keys has length {I}"
+            )
+
+        valid = (np.isfinite(score)
+                 & np.all(np.isfinite(indicators), axis=1)
+                 & np.isfinite(gold))
+        if valid.sum() < 2 * n_folds:
+            raise ValueError(
+                f"BCMConditional.fit requires at least {2 * n_folds} finite "
+                f"training rows; got {int(valid.sum())}"
+            )
+
+        X = np.column_stack([score, indicators])
+
+        # monotonic_cst: +1 (non-decreasing) for score; 0 (unconstrained) for
+        # each item indicator.
+        monotonic_cst = [1] + [0] * I
+
+        full_model = HistGradientBoostingRegressor(
+            monotonic_cst=monotonic_cst,
+            max_iter=max_iter,
+            learning_rate=learning_rate,
+            max_depth=max_depth,
+            random_state=seed,
+        )
+        full_model.fit(X[valid], gold[valid])
+
+        # Collect OOF predictions via k-fold CV.
+        oof = np.full(len(score), np.nan, dtype=float)
+        rng = np.random.default_rng(seed)
+        idx = np.where(valid)[0]
+        rng.shuffle(idx)
+        folds = np.array_split(idx, n_folds)
+        for fk in range(n_folds):
+            test_idx = folds[fk]
+            train_idx = np.concatenate([folds[j] for j in range(n_folds) if j != fk])
+            if len(train_idx) < 2 or len(test_idx) == 0:
+                oof[test_idx] = score[test_idx]
+                continue
+            fold_model = HistGradientBoostingRegressor(
+                monotonic_cst=monotonic_cst,
+                max_iter=max_iter,
+                learning_rate=learning_rate,
+                max_depth=max_depth,
+                random_state=seed,
+            )
+            fold_model.fit(X[train_idx], gold[train_idx])
+            oof[test_idx] = fold_model.predict(X[test_idx])
+
         # For any invalid rows fall back to raw score.
         nan_mask = ~np.isfinite(oof)
         oof[nan_mask] = score[nan_mask]
@@ -386,6 +572,7 @@ class BCMConditional:
         return cls(
             model=full_model,
             scale_name=scale_name,
+            item_keys=item_keys,
             oof_predictions=oof,
         )
 

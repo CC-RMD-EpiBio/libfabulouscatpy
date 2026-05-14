@@ -7,6 +7,20 @@ piecewise-linear interpolation between sklearn's ``X_thresholds_`` /
 ``y_thresholds_`` knots, with clipping outside the training range.
 """
 
-from .bcm import BCM, BCMConditional, BCMSet, fit_bcm, fit_bcm_set
+from .bcm import (
+    BCM,
+    BCMConditional,
+    BCMConditionalInfo,
+    BCMSet,
+    fit_bcm,
+    fit_bcm_set,
+)
 
-__all__ = ["BCM", "BCMConditional", "BCMSet", "fit_bcm", "fit_bcm_set"]
+__all__ = [
+    "BCM",
+    "BCMConditional",
+    "BCMConditionalInfo",
+    "BCMSet",
+    "fit_bcm",
+    "fit_bcm_set",
+]
