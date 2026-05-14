@@ -63,8 +63,8 @@ class EntropyItemSelector(ItemSelector):
 
     description = """Greedy entropy selector"""
 
-    def __init__(self, scoring, deterministic=True, hybrid=False,  **kwargs):
-        super(EntropyItemSelector, self).__init__(**kwargs)
+    def __init__(self, scoring, deterministic=True, hybrid=False, top_k=None, **kwargs):
+        super(EntropyItemSelector, self).__init__(top_k=top_k, **kwargs)
         self.scoring = scoring
         self.hybrid = hybrid
         self.deterministic = deterministic
@@ -188,10 +188,23 @@ class EntropyItemSelector(ItemSelector):
         if self.deterministic or (self.hybrid and ((self.scoring.n_scored[scale] > 3))):
             ndx = np.argmin(Delta)
         else:
-            Delta -= np.min(Delta)
-            probs = np.exp(-Delta / self.temperature)
-            probs /= np.sum(probs)
-            ndx = np.random.choice(np.arange(len(criterion.keys())), p=probs)
+            Delta = np.asarray(Delta, dtype=float)
+            keys = list(criterion.keys())
+            # Occam's-window truncation: restrict the Boltzmann sample to the
+            # top_k candidates with smallest Delta before normalising.  None
+            # means no truncation (full-bank BMA).
+            if self.top_k is not None and self.top_k < len(Delta):
+                window_idx = np.argpartition(Delta, self.top_k)[: self.top_k]
+                Delta_window = Delta[window_idx]
+                Delta_window -= np.min(Delta_window)
+                probs = np.exp(-Delta_window / self.temperature)
+                probs /= np.sum(probs)
+                ndx = int(window_idx[np.random.choice(len(window_idx), p=probs)])
+            else:
+                Delta -= np.min(Delta)
+                probs = np.exp(-Delta / self.temperature)
+                probs /= np.sum(probs)
+                ndx = int(np.random.choice(np.arange(len(keys)), p=probs))
         result = list(criterion.keys())[ndx]
         for i in un_items:
             if i["item"] == result:
@@ -202,10 +215,10 @@ class EntropyItemSelector(ItemSelector):
 class StochasticEntropyItemSelector(EntropyItemSelector):
     description = "Stochastic entropy selector"
 
-    def __init__(self, scoring, **kwargs):
+    def __init__(self, scoring, top_k=None, **kwargs):
         self.deterministic = False
         super(StochasticEntropyItemSelector, self).__init__(
-            scoring=scoring, deterministic=False, **kwargs
+            scoring=scoring, deterministic=False, top_k=top_k, **kwargs
         )
 
 

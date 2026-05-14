@@ -91,6 +91,7 @@ class ItemSelector(ABC):
         inadmissable_scales: list[str] | None = None,
         deterministic: bool = True,
         omit_items: list[str] | None = None,
+        top_k: int | None = None,
         **kwargs,
     ) -> None:
         """Instantiate item selector class
@@ -101,6 +102,11 @@ class ItemSelector(ABC):
             randomize_items (bool, optional): [description]. Defaults to True.
             randomize_scales (bool, optional): [description]. Defaults to True.
             unscored_freq (float, optional): [description]. Defaults to 0.33.
+            top_k (int, optional): Occam's-window truncation for stochastic sampling.
+                When set, the Boltzmann sample is drawn only from the top_k
+                candidates by criterion value (smallest Delta for entropy-style
+                selectors, largest weight otherwise). None means no truncation
+                (sample from the full bank). Ignored in deterministic mode.
         """
         self.model = model
         self.log_add = ""
@@ -116,6 +122,7 @@ class ItemSelector(ABC):
         self.scales = scales
         self.itemdict = {x["item"]: x for x in items}
         self.deterministic = deterministic
+        self.top_k = top_k
         self.unscored_count = 0
         self.inadmissable_scales = (
             [] if inadmissable_scales is None else inadmissable_scales
