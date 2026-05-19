@@ -15,6 +15,7 @@ from .bcm import (
     fit_bcm,
     fit_bcm_set,
 )
+from .newton import NewtonCorrector
 
 __all__ = [
     "BCM",
@@ -23,4 +24,5 @@ __all__ = [
     "BCMSet",
     "fit_bcm",
     "fit_bcm_set",
+    "NewtonCorrector",
 ]
