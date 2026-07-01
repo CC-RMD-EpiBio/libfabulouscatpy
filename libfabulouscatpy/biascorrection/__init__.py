@@ -16,6 +16,15 @@ from .bcm import (
     fit_bcm_set,
 )
 from .newton import NewtonCorrector
+from .triples import (
+    attach_imputation_pmfs,
+    build_bcm_triples,
+    extract_item_params,
+    extract_item_params_from_mcmc,
+    score_subset,
+    stratify_respondents,
+    subsample_data,
+)
 
 __all__ = [
     "BCM",
@@ -25,4 +34,11 @@ __all__ = [
     "fit_bcm",
     "fit_bcm_set",
     "NewtonCorrector",
+    "attach_imputation_pmfs",
+    "build_bcm_triples",
+    "extract_item_params",
+    "extract_item_params_from_mcmc",
+    "score_subset",
+    "stratify_respondents",
+    "subsample_data",
 ]
