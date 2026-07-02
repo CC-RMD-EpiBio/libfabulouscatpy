@@ -46,11 +46,14 @@ def score_subset(
 ) -> np.ndarray:
     """Return per-respondent EAP scores for an item subset.
 
-    Items not in ``subset`` are masked to -1 (missing) so that the
-    imputation model attached to ``model`` fills them in via Rao-Blackwellised
-    PMFs. ``item_params`` (e.g. from ``extract_item_params``) is passed
-    explicitly to avoid relying on ``compute_eap_abilities``'s fallback
-    that requires ``mcmc_samples``.
+    Items not in ``subset`` are masked to -1 (missing). When an imputation
+    model is attached to ``model`` (``model.imputation_model``), those masked
+    items are filled in via Rao-Blackwellised PMFs. When no imputation model
+    is attached, the imputation step is skipped entirely and the masked items
+    are marginalised out of the likelihood (they contribute 0), i.e. the score
+    is the plain baseline-GRM EAP over the observed subset. ``item_params``
+    (e.g. from ``extract_item_params``) is passed explicitly to avoid relying
+    on ``compute_eap_abilities``'s fallback that requires ``mcmc_samples``.
     """
     masked: Dict[str, Any] = {}
     for k in item_keys:
@@ -60,7 +63,8 @@ def score_subset(
         masked[k] = arr
     if 'person' in base_data:
         masked['person'] = base_data['person']
-    masked = attach_imputation_pmfs(model, masked)
+    if getattr(model, 'imputation_model', None) is not None:
+        masked = attach_imputation_pmfs(model, masked)
     eap = model.compute_eap_abilities(masked, item_params=item_params)
     return np.asarray(eap['eap'])
 
