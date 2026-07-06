@@ -175,7 +175,11 @@ def build_training_triples(model, item_keys, all_responses, num_people, rng):
     # Sample random subsets and score each person on each subset
     print("  Scoring naive EAP on random subsets...")
     scores, indicators, golds = [], [], []
-    for size in SUBSET_SIZES:
+    # Anchor the upper boundary (full battery + near-full) so the correction
+    # vanishes at completion; mirrors biascorrection.triples.build_bcm_triples.
+    sizes = {s for s in SUBSET_SIZES if 1 <= s <= I}
+    sizes.update(s for s in (I, I - 1, I - 2, I - 3) if s >= 1)
+    for size in sorted(sizes):
         n_total = min(N_SUBSETS_PER_SIZE, _binom_cap(I, size))
         print(f"    J={size}: {n_total} subset draws")
         for d in range(n_total):
